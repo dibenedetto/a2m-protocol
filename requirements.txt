@@ -1,0 +1,11 @@
+# A2M — AgentToMemory Protocol
+# Core server + client (no heavy dependencies)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.0
+numpy>=1.26
+httpx>=0.27
+
+# Adapter dependencies — install only what you need
+# pip install agno          for the Agno adapter
+# pip install langchain     for the LangChain adapter
