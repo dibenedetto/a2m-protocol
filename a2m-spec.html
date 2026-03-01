@@ -1,0 +1,1040 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>A2M Specification — Draft v0.1</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:      #0d1117;
+      --bg2:     #161b22;
+      --bg3:     #1e2836;
+      --border:  #30363d;
+      --orange:  #f97316;
+      --blue:    #3b82f6;
+      --green:   #10b981;
+      --purple:  #8b5cf6;
+      --red:     #ef4444;
+      --text:    #e6edf3;
+      --text2:   #8b949e;
+      --text3:   #6e7681;
+      --toc-w:   260px;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      font-size: 15px;
+    }
+
+    /* ── Layout ─────────────────────────────────────────────────── */
+    .page {
+      display: grid;
+      grid-template-columns: var(--toc-w) 1fr;
+      min-height: 100vh;
+    }
+
+    /* ── Sidebar / TOC ──────────────────────────────────────────── */
+    aside {
+      position: sticky; top: 0; height: 100vh;
+      overflow-y: auto;
+      background: var(--bg2);
+      border-right: 1px solid var(--border);
+      padding: 32px 0;
+      flex-shrink: 0;
+    }
+
+    .toc-header {
+      padding: 0 20px 20px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 16px;
+    }
+    .toc-title {
+      font-size: 13px; font-weight: 700; color: var(--orange);
+      text-transform: uppercase; letter-spacing: 1.5px;
+    }
+    .toc-version {
+      font-size: 11px; color: var(--text3); margin-top: 3px;
+    }
+
+    .toc-section { margin-bottom: 4px; }
+    .toc-section > a {
+      display: block; padding: 5px 20px;
+      font-size: 13px; font-weight: 600;
+      color: var(--text2); text-decoration: none;
+      transition: color .12s, background .12s;
+    }
+    .toc-section > a:hover { color: var(--text); background: rgba(255,255,255,.04); }
+
+    .toc-sub { padding-left: 0; list-style: none; }
+    .toc-sub a {
+      display: block; padding: 3px 20px 3px 32px;
+      font-size: 12px; color: var(--text3);
+      text-decoration: none; transition: color .12s;
+    }
+    .toc-sub a:hover { color: var(--text2); }
+
+    /* ── Main content ───────────────────────────────────────────── */
+    main {
+      padding: 64px 72px 96px;
+      max-width: 820px;
+    }
+
+    /* ── Doc header ─────────────────────────────────────────────── */
+    .doc-header {
+      border-bottom: 2px solid var(--border);
+      padding-bottom: 32px;
+      margin-bottom: 56px;
+    }
+    .doc-badge {
+      display: inline-flex; align-items: center; gap: 7px;
+      background: rgba(249,115,22,.1);
+      border: 1px solid rgba(249,115,22,.3);
+      color: var(--orange);
+      padding: 4px 12px; border-radius: 100px;
+      font-size: 12px; font-weight: 600;
+      margin-bottom: 20px;
+    }
+    .doc-title {
+      font-size: 38px; font-weight: 900;
+      letter-spacing: -1.5px; line-height: 1.1;
+      margin-bottom: 12px;
+    }
+    .doc-title em { color: var(--orange); font-style: normal; }
+    .doc-subtitle { font-size: 17px; color: var(--text2); max-width: 560px; }
+
+    .doc-meta {
+      display: flex; flex-wrap: wrap; gap: 24px;
+      margin-top: 28px;
+    }
+    .meta-item { font-size: 13px; }
+    .meta-label { color: var(--text3); margin-right: 6px; text-transform: uppercase; letter-spacing: .5px; font-size: 11px; }
+    .meta-val { color: var(--text); font-weight: 500; }
+
+    /* ── Sections ───────────────────────────────────────────────── */
+    .spec-section { margin-bottom: 64px; }
+
+    h2 {
+      font-size: 22px; font-weight: 800; letter-spacing: -.5px;
+      color: var(--text);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 10px;
+      margin-bottom: 24px;
+    }
+    h2 .sec-num {
+      font-size: 13px; font-weight: 600;
+      color: var(--orange); margin-right: 10px;
+      font-family: monospace;
+    }
+
+    h3 {
+      font-size: 15px; font-weight: 700;
+      color: var(--text); margin: 28px 0 10px;
+    }
+    h3 .sub-num {
+      color: var(--text3); margin-right: 8px;
+      font-family: monospace; font-size: 13px;
+    }
+
+    p { margin-bottom: 14px; color: var(--text2); }
+    p strong { color: var(--text); }
+
+    /* ── Callouts ───────────────────────────────────────────────── */
+    .callout {
+      border-left: 3px solid;
+      border-radius: 0 6px 6px 0;
+      padding: 12px 16px;
+      margin: 16px 0 20px;
+      font-size: 13px;
+    }
+    .callout.decision {
+      border-color: var(--orange);
+      background: rgba(249,115,22,.07);
+      color: var(--text2);
+    }
+    .callout.decision strong { color: var(--orange); }
+    .callout.note {
+      border-color: var(--blue);
+      background: rgba(59,130,246,.07);
+      color: var(--text2);
+    }
+    .callout.note strong { color: #60a5fa; }
+    .callout.must {
+      border-color: var(--red);
+      background: rgba(239,68,68,.07);
+      color: var(--text2);
+    }
+    .callout.must strong { color: #f87171; }
+
+    /* ── Tables ─────────────────────────────────────────────────── */
+    .spec-table {
+      width: 100%; border-collapse: collapse;
+      font-size: 13px; margin: 16px 0 24px;
+    }
+    .spec-table th {
+      background: var(--bg3); text-align: left;
+      padding: 9px 14px; font-size: 11px; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .5px;
+      color: var(--text2); border-bottom: 1px solid var(--border);
+    }
+    .spec-table td {
+      padding: 9px 14px;
+      border-bottom: 1px solid rgba(48,54,61,.5);
+      vertical-align: top; color: var(--text2);
+    }
+    .spec-table td:first-child { color: var(--text); font-weight: 500; }
+    .spec-table tr:last-child td { border-bottom: none; }
+    .spec-table td code,
+    .spec-table th code {
+      font-size: 11px; font-family: monospace;
+      background: var(--bg3); padding: 1px 5px; border-radius: 3px;
+      color: var(--text);
+    }
+
+    /* ── Code blocks ────────────────────────────────────────────── */
+    .code-block {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 8px; overflow: hidden; margin: 16px 0 24px;
+    }
+    .code-bar {
+      background: var(--bg3); border-bottom: 1px solid var(--border);
+      padding: 8px 14px;
+      display: flex; align-items: center; gap: 7px;
+    }
+    .code-dot { width: 9px; height: 9px; border-radius: 50%; }
+    .dot-r { background:#ff5f56; } .dot-y { background:#ffbd2e; } .dot-g { background:#27c93f; }
+    .code-lang { font-size: 11px; font-weight: 600; color: var(--text2); margin-left: 4px; }
+    pre {
+      padding: 18px 22px; font-size: 13px; line-height: 1.75;
+      overflow-x: auto;
+      font-family: 'Menlo', 'Consolas', 'Monaco', monospace;
+      color: var(--text);
+    }
+    code {
+      font-family: 'Menlo', 'Consolas', 'Monaco', monospace;
+      font-size: 13px;
+    }
+    p code, li code {
+      background: var(--bg3); padding: 1px 6px; border-radius: 4px;
+      font-size: 12px; color: var(--text);
+    }
+
+    /* Syntax */
+    .kw  { color: #ff7b72; }   /* keywords */
+    .ph  { color: #79c0ff; }   /* paths / params */
+    .st  { color: #a5d6ff; }   /* strings */
+    .jk  { color: #d2a8ff; }   /* JSON keys */
+    .jv  { color: #7ee787; }   /* JSON values / numbers */
+    .cm  { color: var(--text3); font-style: italic; }  /* comments */
+    .tp  { color: #ffa657; }   /* types */
+    .mt  { color: #34d399; }   /* method tags */
+    .req { color: #f87171; }   /* REQUIRED */
+    .opt { color: var(--text3); } /* optional */
+
+    /* ── Inline badges ──────────────────────────────────────────── */
+    .badge {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: .8px; padding: 2px 7px; border-radius: 3px;
+      vertical-align: middle; font-family: monospace;
+    }
+    .b-req  { background: rgba(239,68,68,.15);  color:#f87171; }
+    .b-opt  { background: rgba(107,114,128,.15); color:var(--text3); }
+    .b-key  { background: rgba(249,115,22,.15);  color:#fb923c; }
+    .b-must { background: rgba(239,68,68,.15);   color:#f87171; }
+    .b-may  { background: rgba(59,130,246,.15);  color:#60a5fa; }
+
+    /* ── Method labels ──────────────────────────────────────────── */
+    .method {
+      font-weight: 700; font-family: monospace; font-size: 11px;
+      padding: 2px 8px; border-radius: 3px;
+    }
+    .m-post { background:rgba(16,185,129,.15); color:#34d399; }
+    .m-get  { background:rgba(59,130,246,.15);  color:#60a5fa; }
+    .m-del  { background:rgba(239,68,68,.15);   color:#f87171; }
+    .m-ws   { background:rgba(249,115,22,.15);  color:#fb923c; }
+
+    /* ── Endpoint block ─────────────────────────────────────────── */
+    .endpoint {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 18px 20px; margin: 20px 0;
+    }
+    .ep-header {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+    }
+    .ep-path {
+      font-family: monospace; font-size: 14px; font-weight: 600; color: var(--text);
+    }
+    .ep-desc { font-size: 13px; color: var(--text2); margin-bottom: 0; }
+
+    /* ── Error table ────────────────────────────────────────────── */
+    .err-code { font-family: monospace; font-weight: 700; }
+
+    /* ── Lists ──────────────────────────────────────────────────── */
+    ul, ol { padding-left: 22px; margin-bottom: 14px; color: var(--text2); }
+    li { margin-bottom: 5px; }
+    li strong { color: var(--text); }
+
+    /* ── Responsive ─────────────────────────────────────────────── */
+    @media (max-width: 820px) {
+      .page { grid-template-columns: 1fr; }
+      aside { display: none; }
+      main { padding: 40px 24px 72px; }
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+<!-- ── Sidebar TOC ─────────────────────────────────────────────── -->
+<aside>
+  <div class="toc-header">
+    <div class="toc-title">A2M Spec</div>
+    <div class="toc-version">Draft v0.1 · 2025</div>
+  </div>
+
+  <div class="toc-section"><a href="#abstract">1. Abstract</a></div>
+  <div class="toc-section"><a href="#status">2. Status</a></div>
+  <div class="toc-section"><a href="#goals">3. Design Goals</a></div>
+  <div class="toc-section"><a href="#terminology">4. Terminology</a></div>
+  <div class="toc-section"><a href="#decisions">5. Design Decisions</a>
+    <ul class="toc-sub">
+      <li><a href="#dec-embedding">5.1 Embedding Ownership</a></li>
+      <li><a href="#dec-namespace">5.2 Namespace Resolution</a></li>
+      <li><a href="#dec-backend">5.3 Backend Pluggability</a></li>
+      <li><a href="#dec-conflict">5.4 Write Conflict Policy</a></li>
+    </ul>
+  </div>
+  <div class="toc-section"><a href="#data-model">6. Data Model</a>
+    <ul class="toc-sub">
+      <li><a href="#entry">6.1 Entry</a></li>
+      <li><a href="#memory-types">6.2 Memory Types</a></li>
+      <li><a href="#namespace">6.3 Namespace</a></li>
+    </ul>
+  </div>
+  <div class="toc-section"><a href="#api">7. REST API</a>
+    <ul class="toc-sub">
+      <li><a href="#api-write">7.1 Write</a></li>
+      <li><a href="#api-read">7.2 Read</a></li>
+      <li><a href="#api-list">7.3 List</a></li>
+      <li><a href="#api-query">7.4 Semantic Query</a></li>
+      <li><a href="#api-delete">7.5 Delete</a></li>
+      <li><a href="#api-subscribe">7.6 Subscribe</a></li>
+    </ul>
+  </div>
+  <div class="toc-section"><a href="#backends">8. Backend Requirements</a>
+    <ul class="toc-sub">
+      <li><a href="#be-relational">8.1 Relational</a></li>
+      <li><a href="#be-vector">8.2 Vector</a></li>
+      <li><a href="#be-hybrid">8.3 Hybrid</a></li>
+    </ul>
+  </div>
+  <div class="toc-section"><a href="#adapter">9. Adapter Contract</a></div>
+  <div class="toc-section"><a href="#errors">10. Errors</a></div>
+  <div class="toc-section"><a href="#versioning">11. Versioning</a></div>
+</aside>
+
+<!-- ── Main ────────────────────────────────────────────────────── -->
+<main>
+
+  <!-- Doc header -->
+  <div class="doc-header">
+    <div class="doc-badge">Draft · Not for production use</div>
+    <div class="doc-title"><em>A2M</em> — AgentToMemory<br>Protocol Specification</div>
+    <div class="doc-subtitle">
+      A shared memory protocol enabling AI agents from different frameworks
+      to read, write, and query a common memory store through a single,
+      transport-agnostic interface.
+    </div>
+    <div class="doc-meta">
+      <div class="meta-item"><span class="meta-label">Version</span><span class="meta-val">0.1 (Draft)</span></div>
+      <div class="meta-item"><span class="meta-label">Date</span><span class="meta-val">2025</span></div>
+      <div class="meta-item"><span class="meta-label">License</span><span class="meta-val">Apache 2.0</span></div>
+      <div class="meta-item"><span class="meta-label">Status</span><span class="meta-val">Open for feedback</span></div>
+    </div>
+  </div>
+
+  <!-- §1 Abstract -->
+  <div class="spec-section" id="abstract">
+    <h2><span class="sec-num">§1</span>Abstract</h2>
+    <p>
+      The AI agent ecosystem is fragmented: every framework — LangChain, Agno, n8n, CrewAI,
+      AutoGen — ships its own memory abstraction. Agents from different frameworks running
+      inside the same workflow cannot exchange state, history, or knowledge without custom
+      glue code.
+    </p>
+    <p>
+      <strong>AgentToMemory (A2M)</strong> defines a lightweight, wire-level protocol that decouples
+      agents from their memory backend. Any framework implements a thin adapter; the adapter
+      speaks A2M; any A2M-compliant store answers. No framework changes are required beyond
+      the adapter itself.
+    </p>
+    <p>
+      A2M specifies a REST baseline (universally accessible), an optional WebSocket channel
+      (reactive agents), and a pluggable storage contract covering both relational and
+      vector backends.
+    </p>
+  </div>
+
+  <!-- §2 Status -->
+  <div class="spec-section" id="status">
+    <h2><span class="sec-num">§2</span>Status of this Document</h2>
+    <p>
+      This is a <strong>Draft</strong> specification at version <strong>0.1</strong>.
+      It is open for review and feedback from framework authors, infrastructure providers,
+      and early adopters. All sections are subject to change before a stable release.
+    </p>
+    <p>
+      Feedback should be submitted as GitHub issues at
+      <code>github.com/numel-ai/a2m</code>. Breaking changes to the wire format will
+      increment the major version number and be reflected in the URL base path.
+    </p>
+  </div>
+
+  <!-- §3 Design Goals -->
+  <div class="spec-section" id="goals">
+    <h2><span class="sec-num">§3</span>Design Goals</h2>
+    <table class="spec-table">
+      <thead>
+        <tr><th>Goal</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Framework agnostic</td>
+          <td>No framework-specific types in the wire format. LangChain, Agno, and n8n all see the same API.</td>
+        </tr>
+        <tr>
+          <td>Minimal adapter surface</td>
+          <td>An adapter implements four operations: <code>write</code>, <code>read</code>, <code>query</code>, <code>delete</code>. Nothing else is required.</td>
+        </tr>
+        <tr>
+          <td>REST baseline</td>
+          <td>JSON over HTTP is the canonical transport. Any language, any runtime can participate without a dedicated SDK.</td>
+        </tr>
+        <tr>
+          <td>Pluggable storage</td>
+          <td>The protocol does not mandate a specific database. Relational (SQLite, PostgreSQL) and vector (pgvector, Chroma) backends are both first-class.</td>
+        </tr>
+        <tr>
+          <td>Caller-owned embeddings</td>
+          <td>A2M does not generate embeddings. The caller provides vectors; the store indexes them. This keeps the protocol model-agnostic.</td>
+        </tr>
+        <tr>
+          <td>Explicit namespacing</td>
+          <td>Every entry is addressed by a caller-supplied namespace. No implicit scoping by session or runtime.</td>
+        </tr>
+        <tr>
+          <td>Idempotent writes</td>
+          <td>All writes are upserts keyed on <code>(namespace, key)</code>. Retries are safe.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- §4 Terminology -->
+  <div class="spec-section" id="terminology">
+    <h2><span class="sec-num">§4</span>Terminology</h2>
+    <p>
+      The key words <strong>MUST</strong>, <strong>MUST NOT</strong>, <strong>SHOULD</strong>,
+      <strong>MAY</strong> in this document are to be interpreted as in RFC 2119.
+    </p>
+    <table class="spec-table">
+      <thead>
+        <tr><th>Term</th><th>Definition</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Memory Store</td>
+          <td>The server-side service that persists and retrieves A2M entries. May be embedded or external.</td>
+        </tr>
+        <tr>
+          <td>Entry</td>
+          <td>The atomic unit of memory. A key/value pair enriched with a memory type, optional embedding, and metadata.</td>
+        </tr>
+        <tr>
+          <td>Namespace</td>
+          <td>A hierarchical address string scoping one or more entries: <code>{app}/{workflow}/{session}/{agent}</code>.</td>
+        </tr>
+        <tr>
+          <td>Embedding</td>
+          <td>A caller-provided float32 vector representing the semantic content of an entry. Required for semantic query; optional otherwise.</td>
+        </tr>
+        <tr>
+          <td>Adapter</td>
+          <td>A framework-specific wrapper that implements the framework's native memory interface and delegates all storage to the A2M REST API.</td>
+        </tr>
+        <tr>
+          <td>Relational Backend</td>
+          <td>A SQL-compatible storage engine responsible for key lookup, metadata filtering, and TTL management.</td>
+        </tr>
+        <tr>
+          <td>Vector Backend</td>
+          <td>A vector-index-capable engine responsible for approximate nearest-neighbour search over stored embeddings.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- §5 Design Decisions -->
+  <div class="spec-section" id="decisions">
+    <h2><span class="sec-num">§5</span>Design Decisions</h2>
+    <p>
+      The following decisions were made explicitly and constrain the rest of the specification.
+      They are recorded here to document intent and prevent future ambiguity.
+    </p>
+
+    <h3 id="dec-embedding"><span class="sub-num">5.1</span>Embedding Ownership</h3>
+    <div class="callout decision">
+      <strong>Decision:</strong> embeddings are owned and supplied by the caller. A2M stores and indexes them verbatim. The store MUST NOT generate, replace, or re-normalize embeddings.
+    </div>
+    <p>
+      Embedding models vary by domain, language, and task. Mandating a server-side model
+      would couple the protocol to a specific vendor and degrade quality for callers using
+      specialized models. By delegating embedding to the caller, A2M remains model-agnostic.
+    </p>
+    <p>
+      <strong>Implications:</strong>
+    </p>
+    <ul>
+      <li>Entries of type <code>semantic</code> SHOULD include an embedding. Semantic query on entries without embeddings is undefined behaviour.</li>
+      <li>The <code>/query</code> endpoint requires a caller-provided <code>embedding</code> vector. It does not accept raw text for server-side embedding.</li>
+      <li>Embedding dimension is not validated by the store. Callers MUST use a consistent dimension within a namespace.</li>
+    </ul>
+
+    <h3 id="dec-namespace"><span class="sub-num">5.2</span>Namespace Resolution</h3>
+    <div class="callout decision">
+      <strong>Decision:</strong> namespaces are set explicitly by the caller on every request. The store performs no automatic population of namespace segments.
+    </div>
+    <p>
+      Automatic scoping (e.g., injecting session ID from a JWT) would require A2M to understand
+      authentication contexts, which is out of scope. Explicit namespaces are simpler, auditable,
+      and work across all transport layers.
+    </p>
+    <p>
+      <strong>Implications:</strong>
+    </p>
+    <ul>
+      <li>Framework adapters are responsible for constructing the namespace string from whatever context they have (workflow ID, session ID, agent ID, etc.).</li>
+      <li>The store performs only syntactic validation of the namespace (allowed characters, segment count). Semantic correctness is the caller's responsibility.</li>
+    </ul>
+
+    <h3 id="dec-backend"><span class="sub-num">5.3</span>Backend Pluggability</h3>
+    <div class="callout decision">
+      <strong>Decision:</strong> a conformant A2M store MUST provide both a relational backend (for exact lookup, metadata filtering, TTL) and a vector backend (for semantic search). These MAY be the same engine (e.g., pgvector) or separate engines.
+    </div>
+    <p>
+      Neither a pure SQL database nor a pure vector store is sufficient alone.
+      Relational storage handles structured queries, key lookups, and TTL expiry.
+      Vector storage handles semantic search. Both are required.
+    </p>
+    <p>
+      Reference backend pairs defined in §8:
+    </p>
+    <ul>
+      <li><strong>Embedded / local:</strong> SQLite (relational) + FAISS (vector)</li>
+      <li><strong>Managed / cloud:</strong> PostgreSQL + pgvector (single engine, both roles)</li>
+      <li><strong>Decoupled:</strong> PostgreSQL (relational) + Chroma or Weaviate (vector)</li>
+    </ul>
+
+    <h3 id="dec-conflict"><span class="sub-num">5.4</span>Write Conflict Policy</h3>
+    <div class="callout decision">
+      <strong>Decision:</strong> all writes are upserts keyed on <code>(namespace, key)</code>. If an entry with the same composite key exists, it is replaced. The original <code>id</code> and <code>created_at</code> are preserved; <code>updated_at</code> is refreshed.
+    </div>
+    <p>
+      Upsert semantics make writes idempotent. Network retries, agent restarts, and
+      at-least-once delivery do not produce duplicate entries. Callers that require
+      an immutable append log SHOULD use unique keys (e.g., <code>events/{timestamp_ms}</code>).
+    </p>
+  </div>
+
+  <!-- §6 Data Model -->
+  <div class="spec-section" id="data-model">
+    <h2><span class="sec-num">§6</span>Data Model</h2>
+
+    <h3 id="entry"><span class="sub-num">6.1</span>Entry</h3>
+    <p>
+      An Entry is the atomic unit of memory. All fields are present in read responses.
+      The write request body (<code>EntryWrite</code>) omits server-generated fields.
+    </p>
+
+    <div class="code-block">
+      <div class="code-bar">
+        <div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div>
+        <span class="code-lang">JSON Schema — Entry (read response)</span>
+      </div>
+      <pre>{
+  <span class="jk">"id"</span>:        <span class="tp">string (UUID v7)</span>,          <span class="cm">// server-generated, preserved on upsert</span>
+  <span class="jk">"key"</span>:       <span class="tp">string</span>,                   <span class="req">REQUIRED</span>  <span class="cm">// caller-defined, unique within namespace</span>
+  <span class="jk">"namespace"</span>: <span class="tp">string</span>,                   <span class="req">REQUIRED</span>
+  <span class="jk">"type"</span>:      <span class="tp">MemoryType</span>,               <span class="req">REQUIRED</span>
+  <span class="jk">"value"</span>:     <span class="tp">any JSON</span>,                 <span class="req">REQUIRED</span>  <span class="cm">// string, object, array, number — unrestricted</span>
+  <span class="jk">"embedding"</span>: <span class="tp">number[] | null</span>,          <span class="opt">OPTIONAL</span>  <span class="cm">// float32; caller-provided; required for semantic query</span>
+  <span class="jk">"meta"</span>: {
+    <span class="jk">"source_agent"</span>:     <span class="tp">string | null</span>,  <span class="opt">OPTIONAL</span>
+    <span class="jk">"source_framework"</span>: <span class="tp">string | null</span>,  <span class="opt">OPTIONAL</span>  <span class="cm">// e.g. "langchain", "agno", "n8n"</span>
+    <span class="jk">"created_at"</span>:       <span class="tp">string (ISO8601)</span>, <span class="cm">// server-generated</span>
+    <span class="jk">"updated_at"</span>:       <span class="tp">string (ISO8601)</span>, <span class="cm">// server-generated</span>
+    <span class="jk">"ttl_s"</span>:            <span class="tp">integer | null</span>,  <span class="opt">OPTIONAL</span>  <span class="cm">// seconds until expiry; null = permanent</span>
+    <span class="jk">"tags"</span>:             <span class="tp">string[]</span>,        <span class="opt">OPTIONAL</span>  <span class="cm">// default []</span>
+    <span class="jk">"confidence"</span>:       <span class="tp">float 0–1 | null</span> <span class="opt">OPTIONAL</span>
+  }
+}</pre>
+    </div>
+
+    <p>
+      The <strong>write request</strong> body (<code>EntryWrite</code>) omits <code>id</code>, <code>created_at</code>,
+      and <code>updated_at</code>, which are managed by the store. All other fields follow the same schema.
+    </p>
+
+    <h3 id="memory-types"><span class="sub-num">6.2</span>Memory Types</h3>
+    <p>
+      The <code>type</code> field classifies an entry by its role and intended lifetime.
+      The store MAY use the type to apply default retention policies or indexing strategies.
+    </p>
+
+    <table class="spec-table">
+      <thead>
+        <tr><th>Type</th><th>Lifetime</th><th>Indexed by</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>working</code></td>
+          <td>Session</td>
+          <td>Key</td>
+          <td>In-flight scratchpad. Ephemeral task state. Typically expires at session end via <code>ttl_s</code>.</td>
+        </tr>
+        <tr>
+          <td><code>episodic</code></td>
+          <td>Long</td>
+          <td>Key, tags, time</td>
+          <td>Interaction history. Ordered log of events. Use timestamp-based keys for natural ordering.</td>
+        </tr>
+        <tr>
+          <td><code>semantic</code></td>
+          <td>Long</td>
+          <td>Key, tags, embedding</td>
+          <td>Facts and knowledge. SHOULD include an embedding; eligible for <code>/query</code> search.</td>
+        </tr>
+        <tr>
+          <td><code>procedural</code></td>
+          <td>Long</td>
+          <td>Key, tags</td>
+          <td>Learned steps and heuristics. How to accomplish a class of tasks.</td>
+        </tr>
+        <tr>
+          <td><code>external</code></td>
+          <td>Long</td>
+          <td>Key, tags</td>
+          <td>Reference pointer to an external resource — file path, URL, database row ID, blob handle.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3 id="namespace"><span class="sub-num">6.3</span>Namespace</h3>
+    <p>
+      A namespace is a slash-delimited string identifying the scope of one or more entries.
+      The canonical four-segment form is:
+    </p>
+
+    <div class="code-block">
+      <div class="code-bar">
+        <div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div>
+        <span class="code-lang">Namespace format</span>
+      </div>
+      <pre>{app_id} / {workflow_id} / {session_id} / {agent_id}
+
+<span class="cm">Examples:</span>
+  numel/wf-42/sess-abc/agent-0       <span class="cm">// single agent in a session</span>
+  numel/wf-42/sess-abc               <span class="cm">// all agents in a session</span>
+  numel/wf-42                        <span class="cm">// all sessions in a workflow</span>
+  numel                              <span class="cm">// all workflows in the app</span></pre>
+    </div>
+
+    <p>Namespace rules:</p>
+    <ul>
+      <li>Each segment MUST match <code>[a-z0-9_-]+</code> (lowercase alphanumeric, hyphens, underscores).</li>
+      <li>Trailing segments MAY be omitted to broaden scope. Reads scoped to a shorter namespace return entries from all child namespaces when <code>recursive=true</code>.</li>
+      <li>The minimum valid namespace is a single segment (app ID).</li>
+      <li>Maximum total length: 256 characters.</li>
+    </ul>
+  </div>
+
+  <!-- §7 REST API -->
+  <div class="spec-section" id="api">
+    <h2><span class="sec-num">§7</span>REST API</h2>
+    <p>
+      Base path: <code>/a2m/v1</code>. All request and response bodies are
+      <code>application/json</code>. All timestamps are ISO 8601 UTC.
+    </p>
+    <div class="callout note">
+      <strong>Note:</strong> the namespace is encoded as path segments in all URLs.
+      A namespace <code>numel/wf-42/sess-abc/agent-0</code> becomes the URL fragment
+      <code>/numel/wf-42/sess-abc/agent-0</code>.
+    </div>
+
+    <!-- 7.1 Write -->
+    <h3 id="api-write"><span class="sub-num">7.1</span>Write (Upsert)</h3>
+    <div class="endpoint">
+      <div class="ep-header">
+        <span class="method m-post">POST</span>
+        <span class="ep-path">/a2m/v1/{namespace}/entries</span>
+      </div>
+      <p class="ep-desc">Creates or replaces an entry identified by <code>(namespace, key)</code>. If an entry with the same composite key exists, it is updated in place; <code>id</code> and <code>created_at</code> are preserved.</p>
+    </div>
+
+    <table class="spec-table">
+      <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>key</code></td><td>string</td><td><span class="badge b-req">required</span></td><td>Unique within namespace. Max 512 chars.</td></tr>
+        <tr><td><code>type</code></td><td>MemoryType</td><td><span class="badge b-req">required</span></td><td>One of the five defined types.</td></tr>
+        <tr><td><code>value</code></td><td>any JSON</td><td><span class="badge b-req">required</span></td><td>Unrestricted. String, object, array, or primitive.</td></tr>
+        <tr><td><code>embedding</code></td><td>number[]</td><td><span class="badge b-opt">optional</span></td><td>Float32 vector. Required for entries that will be queried semantically.</td></tr>
+        <tr><td><code>meta</code></td><td>object</td><td><span class="badge b-opt">optional</span></td><td>Any subset of metadata fields. Omitted fields default to <code>null</code> / <code>[]</code>.</td></tr>
+      </tbody>
+    </table>
+
+    <p><strong>Response:</strong> <code>201 Created</code> on insert, <code>200 OK</code> on update. Body: full Entry object.</p>
+
+    <div class="code-block">
+      <div class="code-bar">
+        <div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div>
+        <span class="code-lang">Example — Write a semantic entry</span>
+      </div>
+      <pre><span class="kw">POST</span> <span class="ph">/a2m/v1/numel/wf-42/sess-abc/agent-0/entries</span>
+
+{
+  <span class="jk">"key"</span>:       <span class="st">"user/goal"</span>,
+  <span class="jk">"type"</span>:      <span class="st">"semantic"</span>,
+  <span class="jk">"value"</span>:     <span class="st">"Build a real-time translation pipeline"</span>,
+  <span class="jk">"embedding"</span>: <span class="jv">[0.12, -0.04, 0.87]</span>,
+  <span class="jk">"meta"</span>: { <span class="jk">"tags"</span>: <span class="jv">["user", "goal"]</span>, <span class="jk">"confidence"</span>: <span class="jv">0.95</span> }
+}</pre>
+    </div>
+
+    <!-- 7.2 Read -->
+    <h3 id="api-read"><span class="sub-num">7.2</span>Read</h3>
+    <div class="endpoint">
+      <div class="ep-header">
+        <span class="method m-get">GET</span>
+        <span class="ep-path">/a2m/v1/{namespace}/entries/{key}</span>
+      </div>
+      <p class="ep-desc">Returns the single entry identified by <code>(namespace, key)</code>. Returns <code>404</code> if not found.</p>
+    </div>
+    <p><strong>Response:</strong> <code>200 OK</code>. Body: Entry object.</p>
+
+    <!-- 7.3 List -->
+    <h3 id="api-list"><span class="sub-num">7.3</span>List</h3>
+    <div class="endpoint">
+      <div class="ep-header">
+        <span class="method m-get">GET</span>
+        <span class="ep-path">/a2m/v1/{namespace}/entries</span>
+      </div>
+      <p class="ep-desc">Returns entries in the given namespace. Supports filtering and pagination.</p>
+    </div>
+
+    <table class="spec-table">
+      <thead><tr><th>Query param</th><th>Type</th><th>Default</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>type</code></td><td>MemoryType</td><td>—</td><td>Filter by memory type.</td></tr>
+        <tr><td><code>tag</code></td><td>string (repeatable)</td><td>—</td><td>Filter entries whose tag list includes all specified tags.</td></tr>
+        <tr><td><code>limit</code></td><td>integer</td><td><code>50</code></td><td>Max entries per page. Max 500.</td></tr>
+        <tr><td><code>offset</code></td><td>integer</td><td><code>0</code></td><td>Pagination offset.</td></tr>
+        <tr><td><code>recursive</code></td><td>boolean</td><td><code>false</code></td><td>If <code>true</code>, include entries from all child namespaces.</td></tr>
+      </tbody>
+    </table>
+
+    <p><strong>Response:</strong> <code>200 OK</code>.</p>
+    <div class="code-block">
+      <div class="code-bar">
+        <div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div>
+        <span class="code-lang">JSON — List response</span>
+      </div>
+      <pre>{
+  <span class="jk">"entries"</span>:     <span class="tp">Entry[]</span>,
+  <span class="jk">"total"</span>:       <span class="tp">integer</span>,   <span class="cm">// total matching entries (ignoring pagination)</span>
+  <span class="jk">"next_offset"</span>: <span class="tp">integer | null</span>
+}</pre>
+    </div>
+
+    <!-- 7.4 Query -->
+    <h3 id="api-query"><span class="sub-num">7.4</span>Semantic Query</h3>
+    <div class="endpoint">
+      <div class="ep-header">
+        <span class="method m-post">POST</span>
+        <span class="ep-path">/a2m/v1/{namespace}/query</span>
+      </div>
+      <p class="ep-desc">Returns the top-<em>k</em> most similar entries to a caller-provided embedding vector, ranked by cosine similarity. Only entries that have a stored embedding participate in the search.</p>
+    </div>
+
+    <div class="callout must">
+      <strong>MUST:</strong> the caller supplies the query <code>embedding</code>. The store does not accept raw text and does not perform embedding generation (see §5.1).
+    </div>
+
+    <table class="spec-table">
+      <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><code>embedding</code></td><td>number[]</td><td><span class="badge b-req">required</span></td><td>Query vector. Must match dimension of stored embeddings in namespace.</td></tr>
+        <tr><td><code>type</code></td><td>MemoryType</td><td><span class="badge b-opt">optional</span></td><td>Restrict search to this memory type. Typically <code>semantic</code>.</td></tr>
+        <tr><td><code>top_k</code></td><td>integer</td><td><span class="badge b-opt">optional</span></td><td>Number of results to return. Default <code>5</code>, max <code>100</code>.</td></tr>
+        <tr><td><code>min_score</code></td><td>float 0–1</td><td><span class="badge b-opt">optional</span></td><td>Minimum cosine similarity threshold. Results below are excluded.</td></tr>
+        <tr><td><code>tag</code></td><td>string[]</td><td><span class="badge b-opt">optional</span></td><td>Pre-filter candidates by tag before vector ranking.</td></tr>
+        <tr><td><code>recursive</code></td><td>boolean</td><td><span class="badge b-opt">optional</span></td><td>Include child namespaces in search space. Default <code>false</code>.</td></tr>
+      </tbody>
+    </table>
+
+    <p><strong>Response:</strong> <code>200 OK</code>.</p>
+    <div class="code-block">
+      <div class="code-bar">
+        <div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div>
+        <span class="code-lang">JSON — Query response</span>
+      </div>
+      <pre>[
+  { <span class="jk">"entry"</span>: { <span class="cm">/* Entry */</span> }, <span class="jk">"score"</span>: <span class="jv">0.94</span> },
+  { <span class="jk">"entry"</span>: { <span class="cm">/* Entry */</span> }, <span class="jk">"score"</span>: <span class="jv">0.81</span> }
+]</pre>
+    </div>
+
+    <!-- 7.5 Delete -->
+    <h3 id="api-delete"><span class="sub-num">7.5</span>Delete</h3>
+    <div class="endpoint">
+      <div class="ep-header">
+        <span class="method m-del">DELETE</span>
+        <span class="ep-path">/a2m/v1/{namespace}/entries/{key}</span>
+      </div>
+      <p class="ep-desc">Deletes a single entry. Returns <code>204</code> on success, <code>404</code> if not found.</p>
+    </div>
+
+    <div class="endpoint" style="margin-top:0;">
+      <div class="ep-header">
+        <span class="method m-del">DELETE</span>
+        <span class="ep-path">/a2m/v1/{namespace}/entries?type=&amp;tag=</span>
+      </div>
+      <p class="ep-desc">Bulk delete. Deletes all entries in the namespace matching the given filters. Without filters, clears the entire namespace. Returns <code>204</code> with a <code>X-Deleted-Count</code> response header.</p>
+    </div>
+
+    <!-- 7.6 Subscribe -->
+    <h3 id="api-subscribe"><span class="sub-num">7.6</span>Subscribe (WebSocket)</h3>
+    <div class="endpoint">
+      <div class="ep-header">
+        <span class="method m-ws">WS</span>
+        <span class="ep-path">/a2m/v1/{namespace}/subscribe?pattern={glob}</span>
+      </div>
+      <p class="ep-desc">Opens a WebSocket channel. The server sends a message whenever an entry matching <code>pattern</code> is written or deleted within the namespace. Pattern uses glob syntax (<code>*</code> matches any single segment).</p>
+    </div>
+
+    <div class="code-block">
+      <div class="code-bar">
+        <div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div>
+        <span class="code-lang">JSON — WebSocket message</span>
+      </div>
+      <pre>{
+  <span class="jk">"event"</span>: <span class="st">"write"</span> <span class="cm">| "delete"</span>,
+  <span class="jk">"entry"</span>: { <span class="cm">/* Entry */</span> }
+}</pre>
+    </div>
+  </div>
+
+  <!-- §8 Backend Requirements -->
+  <div class="spec-section" id="backends">
+    <h2><span class="sec-num">§8</span>Backend Requirements</h2>
+    <p>
+      A conformant A2M Memory Store MUST provide both a relational and a vector backend.
+      These MAY be the same engine (e.g., PostgreSQL + pgvector) or separate engines
+      coordinated by the store's service layer.
+    </p>
+
+    <h3 id="be-relational"><span class="sub-num">8.1</span>Relational Backend</h3>
+    <p>The relational backend MUST support:</p>
+    <ul>
+      <li>Exact lookup by <code>(namespace, key)</code>.</li>
+      <li>Prefix-based namespace filtering (for list and recursive queries).</li>
+      <li>Filter by <code>type</code>, by tag membership, by <code>confidence</code> range.</li>
+      <li>Upsert semantics preserving <code>id</code> and <code>created_at</code>.</li>
+      <li>TTL expiry: entries with <code>ttl_s ≠ null</code> MUST be expired no later than <code>ttl_s</code> seconds after <code>created_at</code> (or <code>updated_at</code> on upsert — implementation choice, MUST be documented).</li>
+    </ul>
+
+    <p>Conceptual relational schema:</p>
+    <div class="code-block">
+      <div class="code-bar">
+        <div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div>
+        <span class="code-lang">SQL — conceptual schema</span>
+      </div>
+      <pre><span class="kw">CREATE TABLE</span> entries (
+  id           TEXT         <span class="kw">PRIMARY KEY</span>,            <span class="cm">-- UUID v7</span>
+  namespace    TEXT         <span class="kw">NOT NULL</span>,
+  key          TEXT         <span class="kw">NOT NULL</span>,
+  type         TEXT         <span class="kw">NOT NULL</span>,
+  value        <span class="tp">JSONB</span>        <span class="kw">NOT NULL</span>,
+  embedding    <span class="tp">BYTEA</span>        <span class="kw">NULL</span>,              <span class="cm">-- float32[], backend-dependent</span>
+  source_agent TEXT         <span class="kw">NULL</span>,
+  source_fw    TEXT         <span class="kw">NULL</span>,
+  created_at   TIMESTAMPTZ  <span class="kw">NOT NULL</span>,
+  updated_at   TIMESTAMPTZ  <span class="kw">NOT NULL</span>,
+  expires_at   TIMESTAMPTZ  <span class="kw">NULL</span>,              <span class="cm">-- computed from ttl_s</span>
+  confidence   <span class="tp">REAL</span>         <span class="kw">NULL</span>,
+  <span class="kw">UNIQUE</span>(namespace, key)
+);
+
+<span class="kw">CREATE TABLE</span> entry_tags (
+  entry_id  TEXT  <span class="kw">REFERENCES</span> entries(id) <span class="kw">ON DELETE CASCADE</span>,
+  tag       TEXT  <span class="kw">NOT NULL</span>
+);
+
+<span class="kw">CREATE INDEX</span> ON entries (namespace text_pattern_ops); <span class="cm">-- prefix scan</span>
+<span class="kw">CREATE INDEX</span> ON entries (type);
+<span class="kw">CREATE INDEX</span> ON entries (expires_at) <span class="kw">WHERE</span> expires_at <span class="kw">IS NOT NULL</span>;</pre>
+    </div>
+    <p>Reference implementations: <strong>SQLite</strong> (embedded, v1), <strong>PostgreSQL</strong> (managed).</p>
+
+    <h3 id="be-vector"><span class="sub-num">8.2</span>Vector Backend</h3>
+    <p>The vector backend MUST support:</p>
+    <ul>
+      <li>Ingestion of float32 embedding vectors keyed by entry <code>id</code>.</li>
+      <li>Approximate nearest-neighbour search (cosine similarity) returning ordered <code>(id, score)</code> pairs.</li>
+      <li>Pre-filter by namespace prefix (to restrict search space before ANN ranking).</li>
+      <li>Deletion of a vector by entry <code>id</code>.</li>
+    </ul>
+    <p>
+      The store's service layer joins ANN results with the relational backend to return full Entry objects.
+    </p>
+    <p>Reference implementations: <strong>pgvector</strong> (PostgreSQL extension, co-located with relational), <strong>FAISS</strong> (embedded, local), <strong>Chroma</strong>, <strong>Weaviate</strong> (external managed).</p>
+
+    <h3 id="be-hybrid"><span class="sub-num">8.3</span>Hybrid Backend Configurations</h3>
+    <table class="spec-table">
+      <thead><tr><th>Configuration</th><th>Relational</th><th>Vector</th><th>Best for</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Embedded (v1)</td>
+          <td>SQLite</td>
+          <td>FAISS (in-process)</td>
+          <td>Local development, single-machine deployment, zero external services.</td>
+        </tr>
+        <tr>
+          <td>Single-engine managed</td>
+          <td>PostgreSQL</td>
+          <td>pgvector</td>
+          <td>Production deployments. One database, both roles, transactional consistency.</td>
+        </tr>
+        <tr>
+          <td>Decoupled managed</td>
+          <td>PostgreSQL</td>
+          <td>Chroma / Weaviate</td>
+          <td>High-scale vector workloads requiring dedicated vector infra.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- §9 Adapter Contract -->
+  <div class="spec-section" id="adapter">
+    <h2><span class="sec-num">§9</span>Adapter Contract</h2>
+    <p>
+      A framework adapter MUST expose at minimum the following four operations,
+      delegating storage to the A2M REST API. The adapter is responsible for:
+    </p>
+    <ul>
+      <li>Constructing the <code>namespace</code> string from available framework context.</li>
+      <li>Providing the <code>embedding</code> on writes when the entry will be queried semantically.</li>
+      <li>Providing the <code>embedding</code> on query calls (not raw text).</li>
+      <li>Mapping the framework's native memory types to A2M memory types.</li>
+    </ul>
+
+    <div class="code-block">
+      <div class="code-bar">
+        <div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div>
+        <span class="code-lang">Python — Adapter interface</span>
+      </div>
+      <pre><span class="kw">from</span> abc <span class="kw">import</span> ABC, abstractmethod
+<span class="kw">from</span> typing <span class="kw">import</span> Any
+
+<span class="kw">class</span> <span class="tp">A2MAdapter</span>(ABC):
+
+    <span class="jk">@abstractmethod</span>
+    <span class="kw">def</span> <span class="ph">write</span>(
+        self,
+        key: str,
+        type: str,            <span class="cm"># MemoryType literal</span>
+        value: Any,
+        embedding: list[float] | None = None,
+        meta: dict = {}
+    ) -> dict:                <span class="cm"># returns Entry</span>
+        ...
+
+    <span class="jk">@abstractmethod</span>
+    <span class="kw">def</span> <span class="ph">read</span>(self, key: str) -> dict | None:
+        ...
+
+    <span class="jk">@abstractmethod</span>
+    <span class="kw">def</span> <span class="ph">query</span>(
+        self,
+        embedding: list[float],
+        type: str | None = None,
+        top_k: int = <span class="jv">5</span>,
+        min_score: float | None = None
+    ) -> list[dict]:          <span class="cm"># returns [{ entry, score }]</span>
+        ...
+
+    <span class="jk">@abstractmethod</span>
+    <span class="kw">def</span> <span class="ph">delete</span>(self, key: str) -> None:
+        ...</pre>
+    </div>
+
+    <p>
+      Adapters MAY expose additional methods (e.g., <code>list</code>, <code>subscribe</code>)
+      to expose the full A2M API surface to framework-native callers.
+      The four above are the minimum required for compliance.
+    </p>
+  </div>
+
+  <!-- §10 Errors -->
+  <div class="spec-section" id="errors">
+    <h2><span class="sec-num">§10</span>Error Codes</h2>
+    <p>All error responses carry a JSON body with <code>code</code> (machine-readable) and <code>message</code> (human-readable).</p>
+    <div class="code-block">
+      <div class="code-bar">
+        <div class="code-dot dot-r"></div><div class="code-dot dot-y"></div><div class="code-dot dot-g"></div>
+        <span class="code-lang">JSON — Error body</span>
+      </div>
+      <pre>{ <span class="jk">"code"</span>: <span class="st">"ENTRY_NOT_FOUND"</span>, <span class="jk">"message"</span>: <span class="st">"No entry with key 'user/goal' in namespace 'numel/wf-42'"</span> }</pre>
+    </div>
+
+    <table class="spec-table">
+      <thead><tr><th>HTTP</th><th>Code</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td>400</td><td><code>INVALID_BODY</code></td><td>Request body is malformed or missing a required field.</td></tr>
+        <tr><td>404</td><td><code>ENTRY_NOT_FOUND</code></td><td>No entry matches the given namespace + key.</td></tr>
+        <tr><td>422</td><td><code>INVALID_NAMESPACE</code></td><td>Namespace contains invalid characters or exceeds maximum length.</td></tr>
+        <tr><td>422</td><td><code>INVALID_TYPE</code></td><td><code>type</code> is not one of the five defined MemoryType values.</td></tr>
+        <tr><td>422</td><td><code>DIMENSION_MISMATCH</code></td><td>Embedding dimension does not match previously stored embeddings in the namespace.</td></tr>
+        <tr><td>500</td><td><code>BACKEND_ERROR</code></td><td>Storage backend returned an unexpected error. Safe to retry with exponential back-off.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- §11 Versioning -->
+  <div class="spec-section" id="versioning">
+    <h2><span class="sec-num">§11</span>Versioning</h2>
+    <p>
+      A2M uses a two-component version: <strong>Major.Minor</strong>.
+    </p>
+    <ul>
+      <li><strong>Major</strong> increments on breaking wire-format changes. The major version is embedded in the URL base path (<code>/a2m/v1/</code>, <code>/a2m/v2/</code>, …). Clients and stores MAY support multiple major versions concurrently.</li>
+      <li><strong>Minor</strong> increments on backward-compatible additions (new optional fields, new endpoints). Stores MUST ignore unknown fields in request bodies to remain forward-compatible.</li>
+    </ul>
+    <p>
+      Clients MAY include an <code>A2M-Version: 0.1</code> request header to declare the spec version they were written against. Stores SHOULD use this for diagnostic logging.
+    </p>
+    <div class="callout note">
+      <strong>Note:</strong> this document describes version <strong>0.x</strong> (pre-stable). The major version will be set to <strong>1</strong> upon first stable release, at which point backward-compatibility guarantees become binding.
+    </div>
+  </div>
+
+</main>
+</div>
+</body>
+</html>
