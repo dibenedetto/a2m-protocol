@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>A2M — AgentToMemory Protocol</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:     #0d1117;
+      --bg2:    #161b22;
+      --bg3:    #1e2836;
+      --border: #30363d;
+      --orange: #f97316;
+      --blue:   #3b82f6;
+      --green:  #10b981;
+      --purple: #8b5cf6;
+      --text:   #e6edf3;
+      --text2:  #8b949e;
+      --text3:  #6e7681;
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+    }
+
+    /* ── Navigation ─────────────────────────────────────────────── */
+    nav {
+      position: fixed; top: 0; width: 100%; z-index: 100;
+      background: rgba(13,17,23,0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 0 40px;
+      display: flex; align-items: center; height: 56px; gap: 32px;
+    }
+    .nav-logo {
+      font-weight: 800; font-size: 17px; letter-spacing: -0.5px;
+      color: var(--orange); white-space: nowrap;
+    }
+    .nav-logo span { color: var(--text); font-weight: 400; }
+    nav ul { display: flex; gap: 24px; list-style: none; margin-left: auto; }
+    nav a { color: var(--text2); text-decoration: none; font-size: 14px; transition: color .15s; }
+    nav a:hover { color: var(--text); }
+    .nav-cta {
+      background: var(--orange); color: #fff !important;
+      padding: 6px 18px; border-radius: 6px; font-weight: 600;
+    }
+    .nav-cta:hover { opacity: .85; }
+
+    /* ── Layout ─────────────────────────────────────────────────── */
+    section { padding: 96px 0; }
+    .container { max-width: 920px; margin: 0 auto; padding: 0 40px; }
+
+    /* ── Hero ───────────────────────────────────────────────────── */
+    #hero {
+      min-height: 100vh; display: flex; align-items: center;
+      padding-top: 56px; position: relative; overflow: hidden;
+    }
+    #hero::before {
+      content: '';
+      position: absolute; inset: 0;
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 44px 44px;
+      opacity: 0.25;
+      mask-image: radial-gradient(ellipse 80% 60% at 50% 50%, black, transparent);
+    }
+    .hero-inner { position: relative; }
+
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 7px;
+      background: rgba(249,115,22,.1);
+      border: 1px solid rgba(249,115,22,.3);
+      color: var(--orange);
+      padding: 5px 14px; border-radius: 100px;
+      font-size: 13px; font-weight: 500; margin-bottom: 28px;
+    }
+    .hero-badge-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--orange);
+      animation: pulse 2s ease infinite;
+    }
+    @keyframes pulse {
+      0%,100% { opacity:1; transform:scale(1); }
+      50%      { opacity:.5; transform:scale(.75); }
+    }
+
+    h1 {
+      font-size: clamp(42px, 6.5vw, 76px);
+      font-weight: 900; line-height: 1.02; letter-spacing: -2.5px;
+      margin-bottom: 24px;
+    }
+    h1 em { color: var(--orange); font-style: normal; }
+
+    .hero-sub {
+      font-size: clamp(16px, 2vw, 20px);
+      color: var(--text2); max-width: 580px; margin-bottom: 40px;
+    }
+    .hero-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+
+    .btn {
+      display: inline-block; padding: 13px 30px; border-radius: 8px;
+      font-weight: 600; font-size: 15px; text-decoration: none;
+      transition: opacity .15s, transform .15s;
+    }
+    .btn:hover { transform: translateY(-1px); }
+    .btn-primary { background: var(--orange); color: #fff; }
+    .btn-primary:hover { opacity: .88; }
+    .btn-secondary {
+      background: var(--bg3); color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { background: #243040; }
+
+    /* ── Section headings ───────────────────────────────────────── */
+    .s-label {
+      font-size: 11px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 2px; color: var(--orange); margin-bottom: 10px;
+    }
+    h2 {
+      font-size: clamp(26px, 4vw, 40px);
+      font-weight: 800; letter-spacing: -1px; margin-bottom: 12px;
+    }
+    .s-desc { color: var(--text2); max-width: 580px; margin-bottom: 48px; font-size: 16px; }
+
+    /* ── Problem cards ──────────────────────────────────────────── */
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 14px;
+    }
+    .card {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 20px;
+    }
+    .fw-chip {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 1.2px; padding: 3px 9px; border-radius: 4px;
+      display: inline-block; margin-bottom: 10px;
+    }
+    .chip-lc  { background: rgba(59,130,246,.15); color:#60a5fa; }
+    .chip-ag  { background: rgba(139,92,246,.15);  color:#a78bfa; }
+    .chip-n8  { background: rgba(16,185,129,.15);  color:#34d399; }
+    .chip-cr  { background: rgba(249,115,22,.15);  color:#fb923c; }
+    .chip-au  { background: rgba(8,145,178,.15);   color:#22d3ee; }
+    .card h3 { font-size: 14px; margin-bottom: 6px; }
+    .card p  { font-size: 13px; color: var(--text2); }
+    .card code {
+      font-size: 11px; font-family: monospace;
+      color: var(--text3); display: block; margin-top: 8px;
+      background: var(--bg3); padding: 6px 10px; border-radius: 4px;
+    }
+
+    /* ── Architecture diagram ───────────────────────────────────── */
+    .arch {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 12px; padding: 36px 24px; margin: 36px 0;
+      text-align: center;
+    }
+    .arch-row { display: flex; align-items: center; justify-content: center; gap: 4px; flex-wrap: wrap; margin: 10px 0; }
+    .arch-box {
+      background: var(--bg3); border: 1px solid var(--border);
+      border-radius: 6px; padding: 7px 14px;
+      font-size: 12px; font-weight: 600; font-family: monospace;
+      white-space: nowrap;
+    }
+    .arch-box.hi {
+      background: rgba(249,115,22,.12);
+      border-color: rgba(249,115,22,.5);
+      color: var(--orange); font-size: 14px; padding: 9px 20px;
+    }
+    .arch-box.store {
+      background: rgba(59,130,246,.1);
+      border-color: rgba(59,130,246,.4);
+      color: #60a5fa;
+    }
+    .arch-arr { color: var(--text3); padding: 0 4px; font-size: 18px; }
+    .arch-label { font-size: 11px; color: var(--text3); margin: 6px 0 2px; }
+
+    /* ── Memory types ───────────────────────────────────────────── */
+    .type-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px; margin: 32px 0;
+    }
+    .type-card {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 18px 14px; text-align: center;
+    }
+    .type-icon { font-size: 26px; margin-bottom: 10px; display: block; }
+    .type-tag {
+      font-size: 11px; font-weight: 700; font-family: monospace;
+      color: var(--orange); text-transform: lowercase; margin-bottom: 6px;
+    }
+    .type-desc { font-size: 12px; color: var(--text2); }
+
+    /* ── Namespace ──────────────────────────────────────────────── */
+    .ns-box {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 28px; margin: 28px 0;
+      font-family: monospace;
+    }
+    .ns-path { font-size: 20px; font-weight: 700; color: var(--orange); margin-bottom: 18px; }
+    .ns-parts { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+    .ns-seg {
+      padding: 6px 13px; border-radius: 5px;
+      font-size: 13px; font-weight: 600;
+    }
+    .ns-sep { color: var(--text3); }
+    .seg-app  { background: rgba(59,130,246,.15); color:#60a5fa; }
+    .seg-wf   { background: rgba(139,92,246,.15);  color:#a78bfa; }
+    .seg-sess { background: rgba(16,185,129,.15);  color:#34d399; }
+    .seg-ag   { background: rgba(249,115,22,.15);  color:#fb923c; }
+    .ns-note { font-size: 12px; color: var(--text3); margin-top: 12px; }
+
+    /* ── Code blocks ────────────────────────────────────────────── */
+    .code-block {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 10px; overflow: hidden; margin: 16px 0;
+    }
+    .code-bar {
+      background: var(--bg3); border-bottom: 1px solid var(--border);
+      padding: 9px 16px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .code-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .dot-r { background:#ff5f56; } .dot-y { background:#ffbd2e; } .dot-g { background:#27c93f; }
+    .code-lang { font-size: 12px; font-weight: 600; color: var(--text2); margin-left: 4px; }
+    pre {
+      padding: 20px 24px; font-size: 13px; line-height: 1.75; overflow-x: auto;
+      font-family: 'Menlo', 'Consolas', 'Monaco', monospace; color: var(--text);
+    }
+    .kw  { color: #ff7b72; }
+    .mt  { color: #34d399; }
+    .ph  { color: #79c0ff; }
+    .st  { color: #a5d6ff; }
+    .jk  { color: #d2a8ff; }
+    .jv  { color: #7ee787; }
+    .cm  { color: var(--text3); font-style: italic; }
+    .py  { color: #ffa657; }
+    .pyf { color: #d2a8ff; }
+
+    /* ── API table ──────────────────────────────────────────────── */
+    .api-table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 24px 0; }
+    .api-table th {
+      background: var(--bg3); text-align: left;
+      padding: 10px 16px; font-size: 11px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .5px;
+      color: var(--text2); border-bottom: 1px solid var(--border);
+    }
+    .api-table td {
+      padding: 10px 16px;
+      border-bottom: 1px solid rgba(48,54,61,.6);
+      vertical-align: top; font-size: 13px;
+    }
+    .api-table tr:last-child td { border-bottom: none; }
+    .api-table td:first-child { width: 64px; }
+    .method {
+      font-weight: 700; font-family: monospace; font-size: 11px;
+      padding: 2px 7px; border-radius: 3px;
+    }
+    .m-post { background:rgba(16,185,129,.15); color:#34d399; }
+    .m-get  { background:rgba(59,130,246,.15);  color:#60a5fa; }
+    .m-del  { background:rgba(239,68,68,.15);   color:#f87171; }
+    .m-ws   { background:rgba(249,115,22,.15);  color:#fb923c; }
+    .api-path { font-family: monospace; font-size: 12px; color: var(--text); }
+    .api-desc { color: var(--text2); }
+
+    /* ── Adapter grid ───────────────────────────────────────────── */
+    .adapter-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(195px, 1fr));
+      gap: 14px; margin: 32px 0;
+    }
+    .adapter-card {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 20px;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .adapter-name { font-weight: 700; font-size: 15px; }
+    .status {
+      font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;
+    }
+    .s-ready   { color: #27c93f; }
+    .s-wip     { color: #ffbd2e; }
+    .s-planned { color: var(--text3); }
+    .adapter-desc { font-size: 12px; color: var(--text2); }
+    .adapter-how {
+      font-size: 11px; font-family: monospace;
+      color: var(--text3); margin-top: 4px;
+    }
+
+    /* ── CTA ────────────────────────────────────────────────────── */
+    #cta {
+      background: var(--bg2);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+      text-align: center;
+    }
+    #cta h2 { margin-bottom: 16px; }
+    #cta .s-desc { margin: 0 auto 40px; }
+    .cta-actions { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
+
+    .contact-row {
+      display: flex; justify-content: center;
+      gap: 48px; flex-wrap: wrap; margin-top: 48px;
+      padding-top: 40px; border-top: 1px solid var(--border);
+    }
+    .contact-item { text-align: center; }
+    .contact-label { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+    .contact-value { font-size: 16px; font-weight: 600; color: var(--orange); }
+
+    /* ── Divider ────────────────────────────────────────────────── */
+    hr { border: none; border-top: 1px solid var(--border); margin: 0; }
+
+    /* ── Footer ─────────────────────────────────────────────────── */
+    footer {
+      text-align: center; padding: 32px 40px;
+      font-size: 13px; color: var(--text3);
+    }
+
+    /* ── Responsive ─────────────────────────────────────────────── */
+    @media (max-width: 640px) {
+      nav ul { display: none; }
+      .container { padding: 0 20px; }
+      .arch-row { flex-direction: column; }
+      .arch-arr { transform: rotate(90deg); }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Navigation ──────────────────────────────────────────────── -->
+<nav>
+  <div class="nav-logo">A2M <span>· AgentToMemory</span></div>
+  <ul>
+    <li><a href="#problem">Problem</a></li>
+    <li><a href="#protocol">Protocol</a></li>
+    <li><a href="#api">API</a></li>
+    <li><a href="#adapters">Adapters</a></li>
+    <li><a href="#cta" class="nav-cta">Partner with us</a></li>
+  </ul>
+</nav>
+
+<!-- ── Hero ────────────────────────────────────────────────────── -->
+<section id="hero">
+  <div class="container hero-inner">
+    <div class="hero-badge">
+      <div class="hero-badge-dot"></div>
+      Open Protocol · Draft v0.1
+    </div>
+    <h1><em>AgentToMemory</em><br>A shared memory layer<br>for AI agents.</h1>
+    <p class="hero-sub">
+      LangChain, Agno, n8n, CrewAI — each carries its own memory model.
+      A2M is a thin, open protocol that lets any framework read and write
+      to a shared memory store without rewriting a single agent.
+    </p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="#protocol">Read the spec</a>
+      <a class="btn btn-secondary" href="#adapters">See adapters</a>
+    </div>
+  </div>
+</section>
+
+<hr />
+
+<!-- ── Problem ─────────────────────────────────────────────────── -->
+<section id="problem">
+  <div class="container">
+    <div class="s-label">The Problem</div>
+    <h2>Every framework reinvents memory.</h2>
+    <p class="s-desc">
+      Today, each AI framework ships its own memory abstraction.
+      Agents from different frameworks cannot share state, history, or
+      knowledge — even when running inside the same workflow.
+    </p>
+
+    <div class="grid-3">
+      <div class="card">
+        <span class="fw-chip chip-lc">LangChain</span>
+        <h3>ConversationBufferMemory</h3>
+        <p>In-process Python object. Lives inside the chain, not exportable.</p>
+        <code>memory.load_memory_variables({})</code>
+      </div>
+      <div class="card">
+        <span class="fw-chip chip-ag">Agno</span>
+        <h3>AgentMemory / MemoryDb</h3>
+        <p>Custom schema, PostgreSQL-backed. Tightly coupled to Agno's agent lifecycle.</p>
+        <code>agent.memory.add_user_memory(m)</code>
+      </div>
+      <div class="card">
+        <span class="fw-chip chip-n8">n8n</span>
+        <h3>No native memory</h3>
+        <p>Relies on external HTTP calls or sticky data in workflow context.</p>
+        <code>$json["history"]</code>
+      </div>
+      <div class="card">
+        <span class="fw-chip chip-cr">CrewAI</span>
+        <h3>EntityMemory / ShortTerm</h3>
+        <p>Chromadb-backed, crew-scoped. Not accessible outside the crew run.</p>
+        <code>crew.memory = True</code>
+      </div>
+      <div class="card">
+        <span class="fw-chip chip-au">AutoGen</span>
+        <h3>in_memory context</h3>
+        <p>Message-list context passed per-agent. Ephemeral, lost across runs.</p>
+        <code>agent.chat_messages[…]</code>
+      </div>
+      <div class="card" style="border-style:dashed; display:flex; align-items:center; justify-content:center; text-align:center; color:var(--text3); font-size:13px;">
+        Your<br>framework<br>here
+      </div>
+    </div>
+
+    <!-- Architecture before A2M -->
+    <div class="arch">
+      <div class="arch-label" style="margin-bottom:20px; font-size:13px; color:var(--text2);">
+        Without A2M — each agent carries its own isolated memory
+      </div>
+      <div class="arch-row">
+        <div class="arch-box">LangChain agent<br><span style="font-size:10px;color:var(--text3);">BufferMemory</span></div>
+        <div class="arch-arr">·</div>
+        <div class="arch-box">Agno agent<br><span style="font-size:10px;color:var(--text3);">AgentMemory</span></div>
+        <div class="arch-arr">·</div>
+        <div class="arch-box">n8n node<br><span style="font-size:10px;color:var(--text3);">$json ctx</span></div>
+        <div class="arch-arr">·</div>
+        <div class="arch-box">CrewAI crew<br><span style="font-size:10px;color:var(--text3);">EntityMemory</span></div>
+      </div>
+      <div style="margin-top:20px; font-size:12px; color:#f87171;">
+        ✗ &nbsp;Agents cannot share state &nbsp;·&nbsp; ✗ &nbsp;Memory is lost when the run ends &nbsp;·&nbsp; ✗ &nbsp;No cross-framework queries
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr />
+
+<!-- ── Protocol ─────────────────────────────────────────────────── -->
+<section id="protocol">
+  <div class="container">
+    <div class="s-label">The Solution</div>
+    <h2>One interface.<br>Any framework.</h2>
+    <p class="s-desc">
+      A2M defines a lightweight wire protocol — REST baseline, gRPC optional —
+      so every agent framework talks to the same memory store through a
+      thin adapter. No framework changes required.
+    </p>
+
+    <!-- Architecture after A2M -->
+    <div class="arch">
+      <div class="arch-label" style="margin-bottom:20px; font-size:13px; color:var(--text2);">
+        With A2M — all agents share one memory layer
+      </div>
+      <div class="arch-row">
+        <div class="arch-box">LangChain</div>
+        <div class="arch-arr">→</div>
+        <div class="arch-box">Agno</div>
+        <div class="arch-arr">→</div>
+        <div class="arch-box">n8n</div>
+        <div class="arch-arr">→</div>
+        <div class="arch-box">CrewAI</div>
+      </div>
+      <div class="arch-row" style="margin:16px 0 4px;">
+        <div style="width:100%; text-align:center; color:var(--text3); font-size:20px;">↓ &nbsp;A2M adapters &nbsp;↓</div>
+      </div>
+      <div class="arch-row">
+        <div class="arch-box hi">A2M Protocol</div>
+      </div>
+      <div class="arch-row" style="margin:4px 0 16px;">
+        <div style="width:100%; text-align:center; color:var(--text3); font-size:20px;">↓</div>
+      </div>
+      <div class="arch-row">
+        <div class="arch-box store">Redis / Chroma / Weaviate / SQLite / …</div>
+      </div>
+      <div style="margin-top:20px; font-size:12px; color:#34d399;">
+        ✓ &nbsp;Shared state across frameworks &nbsp;·&nbsp; ✓ &nbsp;Persistent across runs &nbsp;·&nbsp; ✓ &nbsp;Semantic search built-in
+      </div>
+    </div>
+
+    <hr style="border-color:var(--border); margin: 48px 0;" />
+
+    <!-- Memory types -->
+    <div class="s-label">Memory Model</div>
+    <h2>Five memory types.</h2>
+    <p class="s-desc">
+      A2M classifies every entry by its role and lifetime.
+      Agents choose the right type; the store handles retention and indexing.
+    </p>
+
+    <div class="type-grid">
+      <div class="type-card">
+        <span class="type-icon">⚡</span>
+        <div class="type-tag">working</div>
+        <div class="type-desc">In-flight scratchpad. Current task state. Discarded at session end.</div>
+      </div>
+      <div class="type-card">
+        <span class="type-icon">📖</span>
+        <div class="type-tag">episodic</div>
+        <div class="type-desc">Interaction history. What happened, in order. Persistent log.</div>
+      </div>
+      <div class="type-card">
+        <span class="type-icon">🧠</span>
+        <div class="type-tag">semantic</div>
+        <div class="type-desc">Facts and knowledge. Vector-indexed for similarity search.</div>
+      </div>
+      <div class="type-card">
+        <span class="type-icon">🔧</span>
+        <div class="type-tag">procedural</div>
+        <div class="type-desc">Learned steps and heuristics. How to accomplish goals.</div>
+      </div>
+      <div class="type-card">
+        <span class="type-icon">🔗</span>
+        <div class="type-tag">external</div>
+        <div class="type-desc">Pointer to an external resource — file, URL, blob, database row.</div>
+      </div>
+    </div>
+
+    <hr style="border-color:var(--border); margin: 48px 0;" />
+
+    <!-- Namespace -->
+    <div class="s-label">Addressing</div>
+    <h2>Hierarchical namespaces.</h2>
+    <p class="s-desc">
+      Every entry lives in a namespace. Agents scope reads and writes
+      to exactly the right context — no collisions, no leakage.
+    </p>
+
+    <div class="ns-box">
+      <div class="ns-path">{app} / {workflow} / {session} / {agent}</div>
+      <div class="ns-parts">
+        <span class="ns-seg seg-app">numel</span>
+        <span class="ns-sep">/</span>
+        <span class="ns-seg seg-wf">wf-42</span>
+        <span class="ns-sep">/</span>
+        <span class="ns-seg seg-sess">sess-abc</span>
+        <span class="ns-sep">/</span>
+        <span class="ns-seg seg-ag">agent-0</span>
+      </div>
+      <div class="ns-note">
+        Any segment can be omitted to widen scope — e.g. <code style="background:var(--bg3);padding:2px 6px;border-radius:3px;font-size:11px;">numel/wf-42</code> reads everything in workflow 42, across all sessions and agents.
+      </div>
+    </div>
+
+    <hr style="border-color:var(--border); margin: 48px 0;" />
+
+    <!-- Entry schema -->
+    <div class="s-label">Entry Schema</div>
+    <h2>One entry format.</h2>
+    <p class="s-desc">Every memory entry, regardless of framework or backend, is represented identically.</p>
+
+    <div class="code-block">
+      <div class="code-bar">
+        <div class="code-dot dot-r"></div>
+        <div class="code-dot dot-y"></div>
+        <div class="code-dot dot-g"></div>
+        <span class="code-lang">JSON — A2M Entry</span>
+      </div>
+      <pre>{
+  <span class="jk">"id"</span>:        <span class="st">"018f2a3b-…"</span>,
+  <span class="jk">"key"</span>:       <span class="st">"user/goal"</span>,
+  <span class="jk">"namespace"</span>: <span class="st">"numel/wf-42/sess-abc/agent-0"</span>,
+  <span class="jk">"type"</span>:      <span class="st">"semantic"</span>,           <span class="cm">// working | episodic | semantic | procedural | external</span>
+  <span class="jk">"value"</span>:     <span class="st">"Build a real-time translation pipeline"</span>,
+  <span class="jk">"embedding"</span>: <span class="jv">[0.12, -0.04, 0.87, …]</span>,  <span class="cm">// optional — caller-provided or server-generated</span>
+  <span class="jk">"meta"</span>: {
+    <span class="jk">"source_agent"</span>:     <span class="st">"agent-0"</span>,
+    <span class="jk">"source_framework"</span>: <span class="st">"langchain"</span>,
+    <span class="jk">"created_at"</span>:       <span class="st">"2025-09-01T14:22:11Z"</span>,
+    <span class="jk">"updated_at"</span>:       <span class="st">"2025-09-01T14:22:11Z"</span>,
+    <span class="jk">"ttl_s"</span>:            <span class="jv">3600</span>,   <span class="cm">// null = permanent</span>
+    <span class="jk">"tags"</span>:             <span class="jv">["user", "goal"]</span>,
+    <span class="jk">"confidence"</span>:       <span class="jv">0.95</span>
+  }
+}</pre>
+    </div>
+  </div>
+</section>
+
+<hr />
+
+<!-- ── API ──────────────────────────────────────────────────────── -->
+<section id="api">
+  <div class="container">
+    <div class="s-label">Wire Protocol</div>
+    <h2>REST baseline.<br>gRPC optional.</h2>
+    <p class="s-desc">
+      Any HTTP client can talk to A2M. High-performance runtimes can opt in
+      to gRPC or WebSocket transports — same semantics, faster wire.
+    </p>
+
+    <table class="api-table">
+      <thead>
+        <tr>
+          <th>Method</th>
+          <th>Endpoint</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="method m-post">POST</span></td>
+          <td><span class="api-path">/a2m/v1/{namespace}/entries</span></td>
+          <td class="api-desc">Write or upsert a memory entry</td>
+        </tr>
+        <tr>
+          <td><span class="method m-get">GET</span></td>
+          <td><span class="api-path">/a2m/v1/{namespace}/entries/{key}</span></td>
+          <td class="api-desc">Read a single entry by key</td>
+        </tr>
+        <tr>
+          <td><span class="method m-get">GET</span></td>
+          <td><span class="api-path">/a2m/v1/{namespace}/entries?type=&amp;tag=&amp;limit=</span></td>
+          <td class="api-desc">List and filter entries</td>
+        </tr>
+        <tr>
+          <td><span class="method m-post">POST</span></td>
+          <td><span class="api-path">/a2m/v1/{namespace}/query</span></td>
+          <td class="api-desc">Semantic search — body: <code style="font-size:11px;background:var(--bg3);padding:1px 5px;border-radius:3px;">{ text, type?, top_k }</code></td>
+        </tr>
+        <tr>
+          <td><span class="method m-del">DEL</span></td>
+          <td><span class="api-path">/a2m/v1/{namespace}/entries/{key}</span></td>
+          <td class="api-desc">Delete an entry</td>
+        </tr>
+        <tr>
+          <td><span class="method m-ws">WS</span></td>
+          <td><span class="api-path">/a2m/v1/{namespace}/subscribe?pattern=</span></td>
+          <td class="api-desc">Real-time event stream — <code style="font-size:11px;background:var(--bg3);padding:1px 5px;border-radius:3px;">{ event, entry }</code> on write/delete</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Example: write -->
+    <div class="code-block">
+      <div class="code-bar">
+        <div class="code-dot dot-r"></div>
+        <div class="code-dot dot-y"></div>
+        <div class="code-dot dot-g"></div>
+        <span class="code-lang">HTTP — Write an entry</span>
+      </div>
+      <pre><span class="kw">POST</span> <span class="ph">/a2m/v1/numel/wf-42/sess-abc/agent-0/entries</span>
+Content-Type: application/json
+
+{
+  <span class="jk">"key"</span>:   <span class="st">"user/goal"</span>,
+  <span class="jk">"type"</span>:  <span class="st">"semantic"</span>,
+  <span class="jk">"value"</span>: <span class="st">"Build a real-time translation pipeline"</span>,
+  <span class="jk">"meta"</span>:  { <span class="jk">"tags"</span>: <span class="jv">["user", "goal"]</span>, <span class="jk">"confidence"</span>: <span class="jv">0.95</span> }
+}</pre>
+    </div>
+
+    <!-- Example: query -->
+    <div class="code-block">
+      <div class="code-bar">
+        <div class="code-dot dot-r"></div>
+        <div class="code-dot dot-y"></div>
+        <div class="code-dot dot-g"></div>
+        <span class="code-lang">HTTP — Semantic query</span>
+      </div>
+      <pre><span class="kw">POST</span> <span class="ph">/a2m/v1/numel/wf-42/query</span>
+Content-Type: application/json
+
+{
+  <span class="jk">"text"</span>:   <span class="st">"what does the user want to build?"</span>,
+  <span class="jk">"type"</span>:   <span class="st">"semantic"</span>,
+  <span class="jk">"top_k"</span>:  <span class="jv">5</span>
+}
+
+<span class="cm">// Response</span>
+[
+  { <span class="jk">"entry"</span>: { <span class="cm">…</span> }, <span class="jk">"score"</span>: <span class="jv">0.94</span> },
+  { <span class="jk">"entry"</span>: { <span class="cm">…</span> }, <span class="jk">"score"</span>: <span class="jv">0.81</span> }
+]</pre>
+    </div>
+  </div>
+</section>
+
+<hr />
+
+<!-- ── Adapters ─────────────────────────────────────────────────── -->
+<section id="adapters">
+  <div class="container">
+    <div class="s-label">Framework Adapters</div>
+    <h2>Thin wrappers.<br>No framework changes.</h2>
+    <p class="s-desc">
+      Each adapter implements the framework's native memory interface
+      and delegates all reads/writes to the A2M HTTP API.
+      Adopting A2M requires zero changes to existing agents.
+    </p>
+
+    <div class="adapter-grid">
+      <div class="adapter-card">
+        <div class="adapter-name">LangChain</div>
+        <div class="status s-wip">⬤ &nbsp;In progress</div>
+        <div class="adapter-desc">Implements <code style="font-size:11px">BaseMemory</code>. Drop-in replacement for ConversationBufferMemory.</div>
+        <div class="adapter-how">A2MMemory(client, namespace)</div>
+      </div>
+      <div class="adapter-card">
+        <div class="adapter-name">Agno</div>
+        <div class="status s-wip">⬤ &nbsp;In progress</div>
+        <div class="adapter-desc">Implements <code style="font-size:11px">MemoryDb</code>. Wraps Agno's storage interface with A2M calls.</div>
+        <div class="adapter-how">A2MAgnoStore(client, namespace)</div>
+      </div>
+      <div class="adapter-card">
+        <div class="adapter-name">n8n</div>
+        <div class="status s-ready">⬤ &nbsp;Ready today</div>
+        <div class="adapter-desc">HTTP Request node. No adapter code needed — A2M REST is immediately usable.</div>
+        <div class="adapter-how">POST /a2m/v1/… from any workflow</div>
+      </div>
+      <div class="adapter-card">
+        <div class="adapter-name">CrewAI</div>
+        <div class="status s-planned">⬤ &nbsp;Planned</div>
+        <div class="adapter-desc">Wraps <code style="font-size:11px">BaseMemory</code> to route crew memory through A2M.</div>
+        <div class="adapter-how">A2MCrewMemory(client, namespace)</div>
+      </div>
+      <div class="adapter-card">
+        <div class="adapter-name">AutoGen</div>
+        <div class="status s-planned">⬤ &nbsp;Planned</div>
+        <div class="adapter-desc">Hooks into conversation context to persist and retrieve entries via A2M.</div>
+        <div class="adapter-how">A2MAutoGenHook(client, namespace)</div>
+      </div>
+      <div class="adapter-card" style="border-style:dashed; justify-content:center; align-items:center; text-align:center;">
+        <div style="color:var(--text3); font-size:13px;">Your framework</div>
+        <div style="color:var(--text3); font-size:12px; margin-top:4px;">Any language · Any transport</div>
+        <a href="#cta" class="btn btn-secondary" style="font-size:12px; padding:8px 16px; margin-top:12px;">Contribute →</a>
+      </div>
+    </div>
+
+    <!-- Python example -->
+    <div class="code-block" style="margin-top:36px;">
+      <div class="code-bar">
+        <div class="code-dot dot-r"></div>
+        <div class="code-dot dot-y"></div>
+        <div class="code-dot dot-g"></div>
+        <span class="code-lang">Python — LangChain adapter</span>
+      </div>
+      <pre><span class="kw">from</span> langchain.memory <span class="kw">import</span> BaseMemory
+<span class="kw">from</span> a2m <span class="kw">import</span> A2MClient
+
+<span class="kw">class</span> <span class="pyf">A2MMemory</span>(BaseMemory):
+    client: A2MClient
+    namespace: <span class="py">str</span>
+
+    <span class="kw">def</span> <span class="pyf">save_context</span>(self, inputs, outputs):
+        self.client.write(
+            self.namespace,
+            key=<span class="st">"chat_history"</span>,
+            type=<span class="st">"episodic"</span>,
+            value={<span class="st">"in"</span>: inputs, <span class="st">"out"</span>: outputs}
+        )
+
+    <span class="kw">def</span> <span class="pyf">load_memory_variables</span>(self, inputs):
+        results = self.client.query(
+            self.namespace,
+            text=<span class="py">str</span>(inputs),
+            top_k=<span class="jv">5</span>
+        )
+        <span class="kw">return</span> {<span class="st">"history"</span>: [r.value <span class="kw">for</span> r <span class="kw">in</span> results]}</pre>
+    </div>
+  </div>
+</section>
+
+<hr />
+
+<!-- ── CTA ──────────────────────────────────────────────────────── -->
+<section id="cta">
+  <div class="container">
+    <div class="s-label">Get Involved</div>
+    <h2>Help us build<br>the standard.</h2>
+    <p class="s-desc">
+      A2M is an open initiative. We are looking for framework maintainers,
+      infrastructure partners, and early adopters to co-design the spec,
+      implement adapters, and validate the protocol against real workloads.
+    </p>
+
+    <div class="cta-actions">
+      <a class="btn btn-primary" href="mailto:marco.dibenedetto@isti.cnr.it">Partner with us</a>
+      <a class="btn btn-secondary" href="https://github.com/dibenedetto/a2m-protocol">View on GitHub</a>
+    </div>
+
+    <div class="contact-row">
+      <div class="contact-item">
+        <div class="contact-label">Spec</div>
+        <div class="contact-value">Draft v0.1 · Open for feedback</div>
+      </div>
+      <div class="contact-item">
+        <div class="contact-label">License</div>
+        <div class="contact-value">MIT</div>
+      </div>
+      <div class="contact-item">
+        <div class="contact-label">Contact</div>
+        <div class="contact-value">marco.dibenedetto@isti.cnr.it</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  A2M — AgentToMemory Protocol &nbsp;·&nbsp; Draft v0.1 &nbsp;·&nbsp; Built with ♥ by the Numel team
+</footer>
+
+</body>
+</html>
