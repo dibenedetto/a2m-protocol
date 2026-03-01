@@ -6,6 +6,37 @@ pydantic>=2.0
 numpy>=1.26
 httpx>=0.27
 
-# Adapter dependencies — install only what you need
-# pip install agno          for the Agno adapter
-# pip install langchain     for the LangChain adapter
+# ── Optional adapter dependencies ─────────────────────────────────────────────
+# Install only what you need:
+#   pip install agno                    for the Agno memory/vectordb adapters
+#   pip install langchain-core          for the LangChain history/vectorstore adapters
+
+# ── Optional server backends ──────────────────────────────────────────────────
+#
+# LanceDB vector backend (persistent ANN, no PostgreSQL required):
+#   pip install lancedb pyarrow
+#   Usage: python -m server.main --vector-backend lancedb --lancedb-uri ./lancedb_data
+#
+# ChromaDB vector backend (persistent or ephemeral ANN, Python <= 3.12 only):
+#   pip install chromadb
+#   Note: chromadb uses pydantic v1 internals incompatible with Python 3.14+.
+#   Usage: python -m server.main --vector-backend chroma --chroma-path ./chroma_data
+#          python -m server.main --vector-backend chroma           # ephemeral
+#
+# PostgreSQL relational backend (production replacement for SQLite):
+#   pip install psycopg2-binary
+#   Usage: python -m server.main --relational-backend postgresql \
+#                                --postgresql-dsn postgresql://user:pass@localhost/a2m
+#
+# pgvector vector backend (PostgreSQL + pgvector extension, persistent ANN):
+#   pip install psycopg2-binary pgvector
+#   Requires: CREATE EXTENSION IF NOT EXISTS vector;   -- run once in PostgreSQL
+#   Usage: python -m server.main --vector-backend pgvector \
+#                                --pgvector-dsn postgresql://user:pass@localhost/a2m
+#
+# Full PostgreSQL stack (relational + pgvector, both on the same server):
+#   pip install psycopg2-binary pgvector
+#   python -m server.main --relational-backend postgresql \
+#                          --postgresql-dsn postgresql://user:pass@localhost/a2m \
+#                          --vector-backend pgvector \
+#                          --pgvector-dsn  postgresql://user:pass@localhost/a2m
