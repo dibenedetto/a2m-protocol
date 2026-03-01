@@ -79,7 +79,7 @@ from agno.memory.manager import MemoryManager
 from agno.knowledge.knowledge import Knowledge
 from agno.knowledge.document import Document as AgnoDoc
 
-from adapters.agno import A2MAgnoMemoryDb
+from adapters.agno_memorydb import A2MAgnoMemoryDb
 from adapters.agno_vectordb import A2MAgnoVectorDb
 
 

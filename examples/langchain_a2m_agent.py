@@ -112,7 +112,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 from langchain_core.runnables.history import RunnableWithMessageHistory
 
-from adapters.langchain import A2MLangChainHistory
+from adapters.langchain_history import A2MLangChainHistory
 from adapters.langchain_vectorstore import A2MLangChainVectorStore
 
 

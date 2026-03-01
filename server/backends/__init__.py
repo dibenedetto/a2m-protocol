@@ -1,7 +1,7 @@
 """A2M server backends — pluggable relational and vector storage."""
 from .base import AbstractRelationalBackend, AbstractVectorBackend
-from .sqlite import SQLiteRelationalBackend
-from .numpy_backend import NumpyVectorBackend
+from .sqlite_relational import SQLiteRelationalBackend
+from .numpy_vector import NumpyVectorBackend
 
 __all__ = [
     # Abstract interfaces
