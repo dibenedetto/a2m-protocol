@@ -206,8 +206,10 @@ def main():
         from .backends.postgres_relational import PostgreSQLRelationalBackend
         relational = PostgreSQLRelationalBackend(dsn=args.postgresql_dsn)
         print(f"[A2M] Relational backend: PostgreSQL ({args.postgresql_dsn})")
-    else:
+    elif args.relational_backend == "sqlite":
         print(f"[A2M] Relational backend: SQLite ({args.db})")
+    else:
+        raise ValueError(f"Unsupported relational backend: {args.relational_backend}")
 
     # ── Build vector backend ──────────────────────────────────────────────────
     vector = None
@@ -230,13 +232,15 @@ def main():
             f"[A2M] Vector backend: pgvector "
             f"({args.pgvector_dsn}, table={args.pgvector_table})"
         )
-    else:
+    elif args.vector_backend == "numpy":
         from .backends.numpy_vector import NumpyVectorBackend
         vector = NumpyVectorBackend(path=args.numpy_path)
         if args.numpy_path:
             print(f"[A2M] Vector backend: numpy (persistent at {args.numpy_path})")
         else:
             print("[A2M] Vector backend: numpy (ephemeral in-memory)")
+    else:
+        raise ValueError(f"Unsupported vector backend: {args.vector_backend}")
 
     create_app(db_path=args.db, relational=relational, vector=vector)
 

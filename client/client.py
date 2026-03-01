@@ -67,6 +67,18 @@ class A2MClient:
             except (ValueError, KeyError):
                 raise A2MError("UNKNOWN", r.text, r.status_code)
 
+    # ── health ─────────────────────────────────────────────────────────────────
+
+    def health(self) -> dict:
+        """
+        Check server health.  Returns a dict with backend status:
+            {"status": "ok", "relational": {"ok": true, "type": "..."}, "vector": {"type": "..."}}
+        Raises A2MError or httpx exceptions if the server is unreachable.
+        """
+        r = self._http.get(f"{self._base}/a2m/v1/health")
+        self._raise(r)
+        return r.json()
+
     # ── write ────────────────────────────────────────────────────────────────
 
     def write(

@@ -363,3 +363,35 @@ class A2MAgnoVectorDb(VectorDb):
 
     def get_supported_search_types(self) -> List[str]:
         return ["vector"] if self.embed_fn else []
+
+    def optimize(self) -> None:
+        """No-op: A2M backends handle their own index optimisation."""
+
+    def update_metadata(self, content_id: str, metadata: Dict[str, Any]) -> None:
+        """
+        Merge *metadata* into every document whose content_id matches.
+        Backend: Relational (list by cid tag, read-modify-write each entry).
+        """
+        entries = self._list_tagged(f"cid:{content_id}")
+        for e in entries:
+            v = e.get("value", {})
+            if not isinstance(v, dict):
+                continue
+            stored = v.get("meta_data") or {}
+            stored.update(metadata)
+            v["meta_data"] = stored
+            # rebuild tags from the (possibly updated) document
+            doc = _entry_to_doc(e)
+            doc.meta_data = stored
+            content_hash = v.get("content_hash", "")
+            doc_id = v.get("doc_id") or _stable_id(doc)
+            self.client.write(
+                key=e["key"],
+                type="semantic",
+                value=v,
+                embedding=e.get("embedding"),
+                meta={
+                    "source_framework": "agno",
+                    "tags": self._doc_tags(content_hash, doc, doc_id),
+                },
+            )

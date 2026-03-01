@@ -17,6 +17,8 @@ Backend usage per operation:
 │ get_by_ids                     │ read(key) per id                      │ Relational                    │
 │ delete(ids=[…])                │ delete(key) per id                    │ Relational                    │
 │ delete(ids=None)               │ delete_bulk(type="semantic")          │ Relational                    │
+│ mmr_search                     │ query(top_k=fetch_k) + MMR re-rank   │ Relational → Vector → client  │
+│ mmr_search_by_vector           │ query(top_k=fetch_k) + MMR re-rank   │ Relational → Vector → client  │
 └────────────────────────────────┴───────────────────────────────────────┴───────────────────────────────┘
 
 Storage key per document: the document id (caller-supplied or auto-generated UUID4).
@@ -54,8 +56,9 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import uuid
-from typing import Any, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Iterable, List, Optional, Sequence
 
 try:
     from langchain_core.documents import Document as LCDoc
@@ -70,6 +73,44 @@ except ImportError as exc:
 from client.client import A2MClient
 
 _BASE_TAG = "langchain-vs"
+
+
+def _cosine_sim(a: List[float], b: List[float]) -> float:
+    """Cosine similarity between two vectors."""
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(x * x for x in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
+def _mmr_select(
+    query_embedding: List[float],
+    doc_embeddings: List[List[float]],
+    k: int,
+    lambda_mult: float,
+) -> List[int]:
+    """Return indices selected by Maximal Marginal Relevance."""
+    if not doc_embeddings:
+        return []
+    scores = [_cosine_sim(query_embedding, e) for e in doc_embeddings]
+    selected: List[int] = []
+    remaining = list(range(len(doc_embeddings)))
+    for _ in range(min(k, len(doc_embeddings))):
+        best_idx = -1
+        best_score = -float("inf")
+        for i in remaining:
+            relevance = scores[i]
+            redundancy = max(
+                (_cosine_sim(doc_embeddings[i], doc_embeddings[s]) for s in selected),
+                default=0.0,
+            )
+            mmr = lambda_mult * relevance - (1 - lambda_mult) * redundancy
+            if mmr > best_score:
+                best_score = mmr
+                best_idx = i
+        selected.append(best_idx)
+        remaining.remove(best_idx)
+    return selected
 
 
 def _new_id() -> str:
@@ -230,6 +271,60 @@ class A2MLangChainVectorStore(VectorStore):
             top_k=k,
         )
         return [_entry_to_doc(r["entry"]) for r in raw]
+
+    def _select_relevance_score_fn(self) -> Callable[[float], float]:
+        """
+        A2M's /query endpoint returns cosine similarity scores directly
+        (range [-1, 1]).  Normalise to [0, 1] for LangChain's
+        similarity_search_with_relevance_scores().
+        """
+        return self._cosine_relevance_score_fn
+
+    # ── MMR search ────────────────────────────────────────────────────────────
+
+    def max_marginal_relevance_search(
+        self,
+        query: str,
+        k: int = 4,
+        fetch_k: int = 20,
+        lambda_mult: float = 0.5,
+        **kwargs: Any,
+    ) -> List[LCDoc]:
+        """
+        Return documents selected by Maximal Marginal Relevance.
+        Balances relevance to the query with diversity among results.
+        Backend: Relational → Vector (over-fetch), then client-side MMR re-rank.
+        """
+        vec = self._embeddings.embed_query(query)
+        return self.max_marginal_relevance_search_by_vector(
+            vec, k=k, fetch_k=fetch_k, lambda_mult=lambda_mult, **kwargs,
+        )
+
+    def max_marginal_relevance_search_by_vector(
+        self,
+        embedding: List[float],
+        k: int = 4,
+        fetch_k: int = 20,
+        lambda_mult: float = 0.5,
+        **kwargs: Any,
+    ) -> List[LCDoc]:
+        """
+        MMR search using a pre-computed query embedding.
+        Over-fetches fetch_k candidates from A2M, then re-ranks client-side.
+        Backend: Relational → Vector (fetch_k candidates), then client-side MMR.
+        """
+        raw = self.client.query(
+            embedding=embedding,
+            type="semantic",
+            tags=[_BASE_TAG, self.collection_tag],
+            top_k=fetch_k,
+        )
+        if not raw:
+            return []
+        docs = [_entry_to_doc(r["entry"]) for r in raw]
+        doc_embeddings = [r["entry"].get("embedding", []) for r in raw]
+        selected = _mmr_select(embedding, doc_embeddings, k, lambda_mult)
+        return [docs[i] for i in selected]
 
     # ── read ─────────────────────────────────────────────────────────────────
 

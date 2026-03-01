@@ -6,12 +6,14 @@ A2MStore owns one AbstractRelationalBackend and one AbstractVectorBackend and
 provides the public API used by all route handlers.
 
 Default backends (zero external dependencies):
-    relational → SQLiteRelationalBackend   (server/backends/sqlite.py)
-    vector     → NumpyVectorBackend        (server/backends/numpy_backend.py)
+    relational → SQLiteRelationalBackend    (server/backends/sqlite_relational.py)
+    vector     → NumpyVectorBackend         (server/backends/numpy_vector.py)
 
 Production backends:
-    vector     → LanceVectorBackend        (server/backends/lancedb_backend.py)
-    vector     → PgVectorBackend           (server/backends/pgvector_backend.py)
+    relational → PostgreSQLRelationalBackend (server/backends/postgres_relational.py)
+    vector     → LanceVectorBackend          (server/backends/lancedb_vector.py)
+    vector     → PgVectorBackend             (server/backends/pgvector_vector.py)
+    vector     → ChromaVectorBackend         (server/backends/chroma_vector.py)
 
 On startup, A2MStore calls vector.rebuild(all_with_embeddings) so that
 in-memory backends (NumpyVectorBackend) are re-populated from the relational
@@ -176,6 +178,29 @@ class A2MStore:
     def expire(self) -> int:
         """Remove TTL-expired entries from the relational store. Called by background loop."""
         return self.relational.expire()
+
+    # ── health ─────────────────────────────────────────────────────────────────
+
+    def health(self) -> dict:
+        """
+        Probe both backends and return status info.
+        Used by the /a2m/v1/health endpoint.
+        """
+        rel_ok = True
+        try:
+            self.relational.select("__health__", limit=1)
+        except Exception:
+            rel_ok = False
+        return {
+            "status":     "ok" if rel_ok else "degraded",
+            "relational": {
+                "ok":   rel_ok,
+                "type": type(self.relational).__name__,
+            },
+            "vector": {
+                "type": type(self.vector).__name__,
+            },
+        }
 
     # ── pub/sub for WebSocket subscriptions ──────────────────────────────────
 

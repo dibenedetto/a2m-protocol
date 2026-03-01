@@ -14,7 +14,7 @@ Setup:
 
 What this demonstrates:
     ┌──────────────────────────────────────────────────────────────────────┐
-    │  Relational backend  (A2MAgnoMemoryDb)                               │
+    │  Relational backend  (A2MAgnoBaseDb)                               │
     │  - Stores structured user facts (UserMemory objects)                 │
     │  - Exact key/tag lookup — no embeddings needed                       │
     │  - Used by Agno's MemoryManager for persistent user memories         │
@@ -79,18 +79,18 @@ from agno.memory.manager import MemoryManager
 from agno.knowledge.knowledge import Knowledge
 from agno.knowledge.document import Document as AgnoDoc
 
-from adapters.agno_memorydb import A2MAgnoMemoryDb
+from adapters.agno_basedb import A2MAgnoBaseDb
 from adapters.agno_vectordb import A2MAgnoVectorDb
 
 
-# ── 4. Relational backend — MemoryManager with A2MAgnoMemoryDb ────────────────
+# ── 4. Relational backend — MemoryManager with A2MAgnoBaseDb ────────────────
 
 print("=" * 60)
-print("RELATIONAL BACKEND  — User Memories (A2MAgnoMemoryDb)")
+print("RELATIONAL BACKEND  — User Memories (A2MAgnoBaseDb)")
 print("=" * 60)
 
 mem_client = A2MClient(A2M_URL, namespace="demo/agno/memories")
-mem_db     = A2MAgnoMemoryDb(client=mem_client, embed_fn=embed)
+mem_db     = A2MAgnoBaseDb(client=mem_client, embed_fn=embed)
 
 # In a real setup you'd pass mem_db to MemoryManager and let the agent
 # call it automatically.  Here we exercise the interface directly to show

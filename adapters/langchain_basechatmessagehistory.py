@@ -1,6 +1,6 @@
 """
 A2M — AgentToMemory Protocol
-LangChain adapter: A2MLangChainHistory
+LangChain adapter: A2MLangChainBaseChatMessageHistory
 
 Implements LangChain's BaseChatMessageHistory interface (langchain-core ≥ 0.1).
 Messages are serialized via langchain_core message_to_dict / messages_from_dict
@@ -23,19 +23,19 @@ Install requirement:
     pip install langchain-core   (included in: pip install langchain)
 
 Usage:
-    from adapters.langchain import A2MLangChainHistory
+    from adapters.langchain import A2MLangChainBaseChatMessageHistory
     from client import A2MClient
     from langchain_core.runnables.history import RunnableWithMessageHistory
 
     client = A2MClient("http://localhost:8765", namespace="myapp/wf-1/sess-abc/agent-0")
 
     # Without semantic retrieval (chronological):
-    history = A2MLangChainHistory(client=client)
+    history = A2MLangChainBaseChatMessageHistory(client=client)
 
     # With semantic retrieval — caller supplies the embedding function:
     from sentence_transformers import SentenceTransformer
     model = SentenceTransformer("all-MiniLM-L6-v2")
-    history = A2MLangChainHistory(
+    history = A2MLangChainBaseChatMessageHistory(
         client=client,
         embed_fn=lambda t: model.encode(t).tolist(),
     )
@@ -43,7 +43,7 @@ Usage:
     # Use with RunnableWithMessageHistory:
     chain_with_history = RunnableWithMessageHistory(
         chain,
-        get_session_history=lambda session_id: A2MLangChainHistory(
+        get_session_history=lambda session_id: A2MLangChainBaseChatMessageHistory(
             client=client.scoped(session_id)
         ),
     )
@@ -59,7 +59,7 @@ try:
     from langchain_core.messages import BaseMessage, messages_from_dict, message_to_dict
 except ImportError as exc:
     raise ImportError(
-        "langchain-core is required for A2MLangChainHistory. "
+        "langchain-core is required for A2MLangChainBaseChatMessageHistory. "
         "Install it with: pip install langchain-core"
     ) from exc
 
@@ -71,7 +71,7 @@ def _now_ms() -> str:
     return f"{int(time.time() * 1000)}"
 
 
-class A2MLangChainHistory(BaseChatMessageHistory):
+class A2MLangChainBaseChatMessageHistory(BaseChatMessageHistory):
     """
     LangChain ChatMessageHistory adapter for A2M.
 

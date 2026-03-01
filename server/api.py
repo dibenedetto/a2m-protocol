@@ -53,6 +53,17 @@ def _ns_error(e: ValueError) -> JSONResponse:
     )
 
 
+# ── Health ────────────────────────────────────────────────────────────────────
+
+@router.get("/health")
+async def health():
+    """
+    Probe the relational and vector backends.
+    Returns backend status and type names.
+    """
+    return _s().health()
+
+
 # ── Write (upsert) ────────────────────────────────────────────────────────────
 
 @router.post("/{namespace:path}/entries")

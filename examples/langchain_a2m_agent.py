@@ -11,7 +11,7 @@ Setup:
 
 What this demonstrates:
     ┌──────────────────────────────────────────────────────────────────────┐
-    │  Relational backend  (A2MLangChainHistory)                           │
+    │  Relational backend  (A2MLangChainBaseChatMessageHistory)                           │
     │  - Stores every conversation turn as an A2M episodic entry           │
     │  - Exact retrieval by namespace — no embeddings needed               │
     │  - Used by RunnableWithMessageHistory for multi-turn memory          │
@@ -19,6 +19,7 @@ What this demonstrates:
     │  Vector backend  (A2MLangChainVectorStore)                           │
     │  - Stores document chunks with float embeddings                      │
     │  - Cosine-ranked similarity search for retrieval-augmented answers   │
+    │  - MMR search for diverse results (relevance vs. redundancy)         │
     │  - Used as a retriever inside the RAG chain                          │
     └──────────────────────────────────────────────────────────────────────┘
 
@@ -112,7 +113,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 from langchain_core.runnables.history import RunnableWithMessageHistory
 
-from adapters.langchain_history import A2MLangChainHistory
+from adapters.langchain_basechatmessagehistory import A2MLangChainBaseChatMessageHistory
 from adapters.langchain_vectorstore import A2MLangChainVectorStore
 
 
@@ -157,6 +158,19 @@ print("\n[vector] Similarity search with scores: 'namespace' ...")
 for doc, score in vector_store.similarity_search_with_score("namespace", k=2):
     print(f"  [{score:.3f}] {doc.page_content!r}")
 
+# MMR search — balances relevance with diversity
+print("\n[vector] MMR search: 'embedding and vector search' (k=3, fetch_k=6) ...")
+for hit in vector_store.max_marginal_relevance_search(
+    "embedding and vector search", k=3, fetch_k=6, lambda_mult=0.5
+):
+    print(f"  -> {hit.page_content!r}")
+
+# Retrieve documents by ID
+print(f"\n[vector] get_by_ids: retrieving first 2 stored docs ...")
+fetched = vector_store.get_by_ids(doc_ids[:2])
+for d in fetched:
+    print(f"  -> {d.page_content!r}")
+
 # Use the store as a retriever (standard LangChain interface)
 retriever = vector_store.as_retriever(search_kwargs={"k": 2})
 
@@ -164,16 +178,16 @@ retriever = vector_store.as_retriever(search_kwargs={"k": 2})
 # ── 5. Relational backend — conversation history ──────────────────────────────
 
 print("\n" + "=" * 60)
-print("RELATIONAL BACKEND  — Conversation History (A2MLangChainHistory)")
+print("RELATIONAL BACKEND  — Conversation History (A2MLangChainBaseChatMessageHistory)")
 print("=" * 60)
 
-def get_session_history(session_id: str) -> A2MLangChainHistory:
+def get_session_history(session_id: str) -> A2MLangChainBaseChatMessageHistory:
     """
     Factory used by RunnableWithMessageHistory.
     Each session_id gets its own A2M namespace, isolating histories.
     """
     session_client = A2MClient(A2M_URL, namespace=f"demo/langchain/history/{session_id}")
-    return A2MLangChainHistory(client=session_client)
+    return A2MLangChainBaseChatMessageHistory(client=session_client)
 
 
 # ── 6. RAG chain ──────────────────────────────────────────────────────────────

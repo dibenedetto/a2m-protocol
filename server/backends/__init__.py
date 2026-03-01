@@ -11,9 +11,8 @@ __all__ = [
     "SQLiteRelationalBackend",
     "NumpyVectorBackend",
     # Optional backends — imported lazily to avoid hard dependency errors:
-    #   from server.backends.numpy_backend    import NumpyVectorBackend
-    #   from server.backends.postgres         import PostgreSQLRelationalBackend
-    #   from server.backends.pgvector_backend import PgVectorBackend
-    #   from server.backends.lancedb_backend  import LanceVectorBackend
-    #   from server.backends.chroma_backend   import ChromaVectorBackend
+    #   from server.backends.postgres_relational import PostgreSQLRelationalBackend
+    #   from server.backends.pgvector_vector     import PgVectorBackend
+    #   from server.backends.lancedb_vector      import LanceVectorBackend
+    #   from server.backends.chroma_vector       import ChromaVectorBackend
 ]
