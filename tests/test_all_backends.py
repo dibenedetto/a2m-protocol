@@ -315,6 +315,107 @@ def run_langchain_tests(label: str, url: str) -> list[str]:
     return failures
 
 
+def run_cross_framework_tests(label: str, url: str) -> list[str]:
+    """
+    Test that Agno and LangChain adapters can share knowledge natively.
+    Both adapters use the same a2m:knowledge tag, so search() / similarity_search()
+    return results from both frameworks.
+    """
+    failures: list[str] = []
+
+    def check(name: str, condition: bool, detail: str = ""):
+        if not condition:
+            msg = f"  FAIL  {name}" + (f": {detail}" if detail else "")
+            failures.append(msg)
+            print(msg)
+        else:
+            print(f"  ok    {name}")
+
+    from langchain_core.embeddings import Embeddings
+    from langchain_core.documents import Document as LCDoc
+    from agno.knowledge.document import Document as AgnoDoc
+    from adapters.agno_vectordb import A2MAgnoVectorDb
+    from adapters.langchain_vectorstore import A2MLangChainVectorStore
+
+    class XEmbed(Embeddings):
+        def embed_documents(self, texts):
+            return [embed(t) for t in texts]
+        def embed_query(self, text):
+            return embed(text)
+
+    xemb = XEmbed()
+
+    # Both adapters share the SAME namespace
+    ns = "test/cross/shared"
+    agno_client = A2MClient(url, namespace=ns)
+    lc_client   = A2MClient(url, namespace=ns)
+
+    agno_vdb = A2MAgnoVectorDb(client=agno_client, embed_fn=embed)
+    lc_store = A2MLangChainVectorStore(client=lc_client, embeddings=xemb)
+
+    # -- Agno writes
+    agno_docs = [
+        AgnoDoc(content="A2M is a shared memory protocol for AI agents.",
+                id="agno-x1", name="overview"),
+        AgnoDoc(content="Embeddings are always caller-provided.",
+                id="agno-x2", name="embed-info"),
+    ]
+    agno_vdb.insert("xhash1", agno_docs)
+
+    # -- LangChain writes
+    lc_docs = [
+        LCDoc(page_content="LangChain agents share state via the A2M REST API.",
+              metadata={"src": "blog"}),
+        LCDoc(page_content="Vector search uses cosine similarity over embeddings.",
+              metadata={"src": "spec"}),
+    ]
+    lc_store.add_documents(lc_docs)
+
+    # -- LangChain reads Agno docs
+    lc_results = lc_store.similarity_search("shared memory protocol", k=5)
+    lc_texts = [d.page_content for d in lc_results]
+    agno_found_by_lc = any("shared memory protocol" in t for t in lc_texts)
+    check("cross.lc_finds_agno", agno_found_by_lc,
+          f"texts={[t[:40] for t in lc_texts]}")
+
+    # -- Agno reads LangChain docs
+    agno_results = agno_vdb.search("cosine similarity", limit=5)
+    agno_texts = [d.content for d in agno_results]
+    lc_found_by_agno = any("cosine similarity" in t for t in agno_texts)
+    check("cross.agno_finds_lc", lc_found_by_agno,
+          f"texts={[t[:40] for t in agno_texts]}")
+
+    # -- Both get mixed results
+    lc_mixed = lc_store.similarity_search("agents and memory", k=4)
+    check("cross.lc_mixed_results", len(lc_mixed) == 4,
+          f"got {len(lc_mixed)}")
+
+    agno_mixed = agno_vdb.search("agents and memory", limit=4)
+    check("cross.agno_mixed_results", len(agno_mixed) == 4,
+          f"got {len(agno_mixed)}")
+
+    # -- LangChain similarity_search_with_score works with Agno docs
+    scored = lc_store.similarity_search_with_score("shared memory", k=3)
+    check("cross.lc_scored_has_agno",
+          any("shared memory protocol" in d.page_content for d, _ in scored),
+          f"scored={[(d.page_content[:30], s) for d, s in scored]}")
+
+    # -- Agno _entry_to_doc reconstructs LangChain doc correctly
+    for doc in agno_results:
+        check("cross.agno_doc_has_content", doc.content != "",
+              f"content={doc.content!r}")
+
+    # -- LangChain _entry_to_doc reconstructs Agno doc correctly
+    for doc in lc_results:
+        check("cross.lc_doc_has_content", doc.page_content != "",
+              f"page_content={doc.page_content!r}")
+
+    # Cleanup
+    agno_client.delete_bulk()
+
+    return failures
+
+
 # ---------------------------------------------------------------------------
 # Backend builders
 # ---------------------------------------------------------------------------
@@ -426,7 +527,12 @@ def main():
             f3 = run_langchain_tests(label, url)
             total_failures.extend(f3)
 
-            combo_total = len(f1) + len(f2) + len(f3)
+            # Cross-framework sharing tests
+            print(f"\n--- Cross-framework sharing tests ---")
+            f4 = run_cross_framework_tests(label, url)
+            total_failures.extend(f4)
+
+            combo_total = len(f1) + len(f2) + len(f3) + len(f4)
             status = "PASS" if combo_total == 0 else f"FAIL ({combo_total} failures)"
             print(f"\n  [{status}] {label}\n")
 

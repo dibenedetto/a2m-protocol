@@ -72,7 +72,7 @@ except ImportError as exc:
 
 from client.client import A2MClient
 
-_BASE_TAG = "langchain-vs"
+_BASE_TAG = "a2m:knowledge"
 
 
 def _cosine_sim(a: List[float], b: List[float]) -> float:
@@ -118,13 +118,21 @@ def _new_id() -> str:
 
 
 def _entry_to_doc(entry: dict) -> LCDoc:
+    """Convert an A2M entry to a LangChain Document.
+
+    Handles both LangChain-originated entries (``page_content`` / ``metadata``)
+    and Agno-originated entries (``content`` / ``meta_data``) so that
+    cross-framework knowledge sharing works transparently.
+    """
     v = entry.get("value", {})
     if not isinstance(v, dict):
         return LCDoc(page_content=str(v), id=entry.get("key"))
+    text = v.get("page_content") or v.get("content", "")
+    meta = v.get("metadata") or v.get("meta_data") or {}
     return LCDoc(
-        page_content=v.get("page_content", ""),
-        metadata=v.get("metadata") or {},
-        id=v.get("id") or entry.get("key"),
+        page_content=text,
+        metadata=meta,
+        id=v.get("id") or v.get("doc_id") or entry.get("key"),
     )
 
 
@@ -249,7 +257,7 @@ class A2MLangChainVectorStore(VectorStore):
         raw = self.client.query(
             embedding=vec,
             type="semantic",
-            tags=[_BASE_TAG, self.collection_tag],
+            tags=[_BASE_TAG],
             top_k=k,
         )
         return [(_entry_to_doc(r["entry"]), float(r["score"])) for r in raw]
@@ -267,7 +275,7 @@ class A2MLangChainVectorStore(VectorStore):
         raw = self.client.query(
             embedding=embedding,
             type="semantic",
-            tags=[_BASE_TAG, self.collection_tag],
+            tags=[_BASE_TAG],
             top_k=k,
         )
         return [_entry_to_doc(r["entry"]) for r in raw]
@@ -316,7 +324,7 @@ class A2MLangChainVectorStore(VectorStore):
         raw = self.client.query(
             embedding=embedding,
             type="semantic",
-            tags=[_BASE_TAG, self.collection_tag],
+            tags=[_BASE_TAG],
             top_k=fetch_k,
         )
         if not raw:
@@ -354,7 +362,7 @@ class A2MLangChainVectorStore(VectorStore):
         if ids is None:
             count = self.client.delete_bulk(
                 type="semantic",
-                tags=[_BASE_TAG, self.collection_tag],
+                tags=[_BASE_TAG],
             )
             return count > 0
         for id_ in ids:

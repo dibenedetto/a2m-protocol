@@ -80,7 +80,7 @@ except ImportError as exc:
 
 from client.client import A2MClient
 
-_TAG = "agno-vector"
+_TAG = "a2m:knowledge"
 
 
 def _stable_id(doc: Document) -> str:
@@ -89,15 +89,22 @@ def _stable_id(doc: Document) -> str:
 
 
 def _entry_to_doc(entry: dict) -> Document:
-    """Reconstruct an agno Document from an A2M entry dict."""
+    """Reconstruct an agno Document from an A2M entry dict.
+
+    Handles both Agno-originated entries (``content`` / ``meta_data``) and
+    LangChain-originated entries (``page_content`` / ``metadata``) so that
+    cross-framework knowledge sharing works transparently.
+    """
     v = entry.get("value", {})
     if not isinstance(v, dict):
         return Document(content=str(v))
+    content = v.get("content") or v.get("page_content", "")
+    meta = v.get("meta_data") or v.get("metadata") or {}
     return Document(
-        content=v.get("content", ""),
-        id=v.get("doc_id") or entry.get("key"),
+        content=content,
+        id=v.get("doc_id") or v.get("id") or entry.get("key"),
         name=v.get("name"),
-        meta_data=v.get("meta_data") or {},
+        meta_data=meta,
         content_id=v.get("content_id"),
     )
 

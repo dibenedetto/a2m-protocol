@@ -127,14 +127,14 @@ class A2MLangChainBaseChatMessageHistory(BaseChatMessageHistory):
             results = self.client.query(
                 embedding=self.embed_fn(probe),
                 type="episodic",
-                tags=["langchain-history"],
+                tags=["a2m:history"],
                 top_k=self.max_results,
             )
             raw = [r["entry"]["value"] for r in results]
         else:
             resp = self.client.list(
                 type="episodic",
-                tags=["langchain-history"],
+                tags=["a2m:history"],
                 limit=self.max_results,
             )
             raw = [e["value"] for e in resp["entries"]]
@@ -164,7 +164,7 @@ class A2MLangChainBaseChatMessageHistory(BaseChatMessageHistory):
                 embedding=embedding,
                 meta={
                     "source_framework": "langchain",
-                    "tags": ["langchain-history", f"role:{msg.type}"],
+                    "tags": ["a2m:history", f"role:{msg.type}"],
                 },
             )
 
@@ -173,4 +173,4 @@ class A2MLangChainBaseChatMessageHistory(BaseChatMessageHistory):
         Delete all messages in this namespace.
         Backend: Relational.
         """
-        self.client.delete_bulk(type="episodic", tags=["langchain-history"])
+        self.client.delete_bulk(type="episodic", tags=["a2m:history"])

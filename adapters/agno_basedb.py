@@ -8,15 +8,15 @@ cultural knowledge, learnings, schema versioning) maps to A2M entries.
 
 A2M storage layout
 ------------------
-  __schema__/{table}          type=working,    tags=[agno-schema]
-  session/{stype}/{sid}       type=working,    tags=[agno-session, stype:*, user:*, component:*]
-  memory/{mid}                type=semantic,   tags=[agno-memory, user:*, <topics>]
-  knowledge/{id}              type=semantic,   tags=[agno-knowledge, linked:*]
-  eval/{run_id}               type=procedural, tags=[agno-eval, agent:*, model:*, etype:*]
-  trace/{trace_id}            type=working,    tags=[agno-trace, run:*, session:*, user:*, agent:*, team:*, workflow:*, status:*]
-  span/{span_id}              type=working,    tags=[agno-span, trace:*, parent:*]
-  culture/{id}                type=semantic,   tags=[agno-culture, agent:*, team:*]
-  learning/{id}               type=procedural, tags=[agno-learning, ltype:*, user:*, agent:*, team:*, session:*]
+  __schema__/{table}          type=working,    tags=[a2m:schema]
+  session/{stype}/{sid}       type=working,    tags=[a2m:session, stype:*, user:*, component:*]
+  memory/{mid}                type=semantic,   tags=[a2m:memory, user:*, <topics>]
+  knowledge/{id}              type=semantic,   tags=[a2m:knowledge, linked:*]
+  eval/{run_id}               type=procedural, tags=[a2m:eval, agent:*, model:*, etype:*]
+  trace/{trace_id}            type=working,    tags=[a2m:trace, run:*, session:*, user:*, agent:*, team:*, workflow:*, status:*]
+  span/{span_id}              type=working,    tags=[a2m:span, trace:*, parent:*]
+  culture/{id}                type=semantic,   tags=[a2m:culture, agent:*, team:*]
+  learning/{id}               type=procedural, tags=[a2m:learning, ltype:*, user:*, agent:*, team:*, session:*]
 
 Embeddings are always caller-supplied (A2M never generates them).
 Supply `embed_fn` at construction to enable semantic search over memories
@@ -210,22 +210,22 @@ class A2MAgnoBaseDb(BaseDb):
     # category.  When Agno asks "does agno_sessions exist?", we probe the
     # A2M server with a targeted list query for that category.
     _TABLE_MAP: dict[str, tuple[str, str]] = {
-        "agno_sessions":          ("working",    "agno-session"),
-        "agno_culture":           ("semantic",   "agno-culture"),
-        "agno_memories":          ("semantic",   "agno-memory"),
-        "agno_metrics":           ("working",    "agno-session"),
-        "agno_eval_runs":         ("procedural", "agno-eval"),
-        "agno_knowledge":         ("semantic",   "agno-knowledge"),
-        "agno_traces":            ("working",    "agno-trace"),
-        "agno_spans":             ("working",    "agno-span"),
-        "agno_schema_versions":   ("working",    "agno-schema"),
-        "agno_learnings":         ("procedural", "agno-learning"),
-        "agno_components":        ("working",    "agno-component"),
-        "agno_component_configs": ("working",    "agno-component-config"),
-        "agno_component_links":   ("working",    "agno-component-link"),
-        "agno_schedules":         ("working",    "agno-schedule"),
-        "agno_schedule_runs":     ("working",    "agno-schedule-run"),
-        "agno_approvals":         ("working",    "agno-approval"),
+        "agno_sessions":          ("working",    "a2m:session"),
+        "agno_culture":           ("semantic",   "a2m:culture"),
+        "agno_memories":          ("semantic",   "a2m:memory"),
+        "agno_metrics":           ("working",    "a2m:session"),
+        "agno_eval_runs":         ("procedural", "a2m:eval"),
+        "agno_knowledge":         ("semantic",   "a2m:knowledge"),
+        "agno_traces":            ("working",    "a2m:trace"),
+        "agno_spans":             ("working",    "a2m:span"),
+        "agno_schema_versions":   ("working",    "a2m:schema"),
+        "agno_learnings":         ("procedural", "a2m:learning"),
+        "agno_components":        ("working",    "a2m:component"),
+        "agno_component_configs": ("working",    "a2m:component-config"),
+        "agno_component_links":   ("working",    "a2m:component-link"),
+        "agno_schedules":         ("working",    "a2m:schedule"),
+        "agno_schedule_runs":     ("working",    "a2m:schedule-run"),
+        "agno_approvals":         ("working",    "a2m:approval"),
     }
 
     def table_exists(self, table_name: str) -> bool:
@@ -258,7 +258,7 @@ class A2MAgnoBaseDb(BaseDb):
         self._write(
             key=f"__schema__/{table_name}",
             type="working",
-            tags=["agno-schema"],
+            tags=["a2m:schema"],
             value={"table": table_name, "version": version},
         )
 
@@ -267,7 +267,7 @@ class A2MAgnoBaseDb(BaseDb):
     # -----------------------------------------------------------------------
 
     def _user_tags(self, user_id: Optional[str]) -> list[str]:
-        tags = ["agno-memory"]
+        tags = ["a2m:memory"]
         if user_id:
             tags.append(f"user:{user_id}")
         return tags
@@ -360,7 +360,7 @@ class A2MAgnoBaseDb(BaseDb):
             self.delete_user_memory(mid, user_id=user_id)
 
     def clear_memories(self) -> None:
-        self.client.delete_bulk(type="semantic", tags=["agno-memory"])
+        self.client.delete_bulk(type="semantic", tags=["a2m:memory"])
 
     def get_all_memory_topics(self, user_id: Optional[str] = None) -> List[str]:
         topics: set[str] = set()
@@ -417,7 +417,7 @@ class A2MAgnoBaseDb(BaseDb):
         user_id:      Optional[str] = None,
         component_id: Optional[str] = None,
     ) -> list[str]:
-        tags = ["agno-session", f"stype:{session_type.value}"]
+        tags = ["a2m:session", f"stype:{session_type.value}"]
         if user_id:      tags.append(f"user:{user_id}")
         if component_id: tags.append(f"component:{component_id}")
         return tags
@@ -573,7 +573,7 @@ class A2MAgnoBaseDb(BaseDb):
         """
         metrics: list[dict] = []
         for stype in SessionType:
-            entries = self._all_entries(type="working", tags=["agno-session", f"stype:{stype.value}"])
+            entries = self._all_entries(type="working", tags=["a2m:session", f"stype:{stype.value}"])
             for e in entries:
                 v = e["value"]
                 ts = v.get("created_at")
@@ -600,7 +600,7 @@ class A2MAgnoBaseDb(BaseDb):
         return f"knowledge/{id}"
 
     def upsert_knowledge_content(self, knowledge_row: KnowledgeRow) -> Any:
-        tags = ["agno-knowledge"]
+        tags = ["a2m:knowledge"]
         if knowledge_row.linked_to:
             tags.append(f"linked:{knowledge_row.linked_to}")
         self._write(
@@ -625,7 +625,7 @@ class A2MAgnoBaseDb(BaseDb):
         sort_order: Optional[str] = None,
         linked_to:  Optional[str] = None,
     ) -> Tuple[List[KnowledgeRow], int]:
-        tags = ["agno-knowledge"]
+        tags = ["a2m:knowledge"]
         if linked_to:
             tags.append(f"linked:{linked_to}")
         entries = self._page(type="semantic", tags=tags, limit=limit, page=page)
@@ -646,7 +646,7 @@ class A2MAgnoBaseDb(BaseDb):
         return f"eval/{run_id}"
 
     def _eval_tags(self, eval_run: EvalRunRecord) -> list[str]:
-        tags = ["agno-eval"]
+        tags = ["a2m:eval"]
         if eval_run.agent_id:    tags.append(f"agent:{eval_run.agent_id}")
         if eval_run.model_id:    tags.append(f"model:{eval_run.model_id}")
         if eval_run.team_id:     tags.append(f"team:{eval_run.team_id}")
@@ -691,7 +691,7 @@ class A2MAgnoBaseDb(BaseDb):
         eval_type:   Optional[List[EvalType]] = None,
         deserialize: Optional[bool]           = True,
     ) -> Union[List[EvalRunRecord], Tuple[List[Dict[str, Any]], int]]:
-        tags = ["agno-eval"]
+        tags = ["a2m:eval"]
         if agent_id:    tags.append(f"agent:{agent_id}")
         if model_id:    tags.append(f"model:{model_id}")
         if team_id:     tags.append(f"team:{team_id}")
@@ -744,7 +744,7 @@ class A2MAgnoBaseDb(BaseDb):
         return f"trace/{trace_id}"
 
     def _trace_tags(self, trace: Any) -> list[str]:
-        tags = ["agno-trace"]
+        tags = ["a2m:trace"]
         for attr, prefix in [
             ("run_id",      "run"),
             ("session_id",  "session"),
@@ -780,7 +780,7 @@ class A2MAgnoBaseDb(BaseDb):
             entry = self.client.read(self._trace_key(trace_id))
             return entry["value"] if entry else None
         # search by secondary field
-        tags = ["agno-trace"]
+        tags = ["a2m:trace"]
         if run_id:     tags.append(f"run:{run_id}")
         if session_id: tags.append(f"session:{session_id}")
         if user_id:    tags.append(f"user:{user_id}")
@@ -802,7 +802,7 @@ class A2MAgnoBaseDb(BaseDb):
         limit:      Optional[int]      = 20,
         page:       Optional[int]      = 1,
     ) -> Tuple[List[Any], int]:
-        tags = ["agno-trace"]
+        tags = ["a2m:trace"]
         if run_id:     tags.append(f"run:{run_id}")
         if session_id: tags.append(f"session:{session_id}")
         if user_id:    tags.append(f"user:{user_id}")
@@ -873,7 +873,7 @@ class A2MAgnoBaseDb(BaseDb):
         return f"span/{span_id}"
 
     def _span_tags(self, span: Any) -> list[str]:
-        tags = ["agno-span"]
+        tags = ["a2m:span"]
         tid = getattr(span, "trace_id",      None)
         pid = getattr(span, "parent_span_id", None)
         if tid: tags.append(f"trace:{tid}")
@@ -903,7 +903,7 @@ class A2MAgnoBaseDb(BaseDb):
         parent_span_id: Optional[str] = None,
         limit:          Optional[int] = 1000,
     ) -> List[Any]:
-        tags = ["agno-span"]
+        tags = ["a2m:span"]
         if trace_id:       tags.append(f"trace:{trace_id}")
         if parent_span_id: tags.append(f"parent:{parent_span_id}")
         entries = self._page(type="working", tags=tags, limit=limit, page=1)
@@ -920,7 +920,7 @@ class A2MAgnoBaseDb(BaseDb):
         self,
         ck: CulturalKnowledge,
     ) -> list[str]:
-        tags = ["agno-culture"]
+        tags = ["a2m:culture"]
         if ck.agent_id: tags.append(f"agent:{ck.agent_id}")
         if ck.team_id:  tags.append(f"team:{ck.team_id}")
         return tags
@@ -958,7 +958,7 @@ class A2MAgnoBaseDb(BaseDb):
         agent_id:   Optional[str] = None,
         team_id:    Optional[str] = None,
     ) -> Optional[List[CulturalKnowledge]]:
-        tags = ["agno-culture"]
+        tags = ["a2m:culture"]
         if agent_id: tags.append(f"agent:{agent_id}")
         if team_id:  tags.append(f"team:{team_id}")
         entries = self._page(type="semantic", tags=tags, limit=limit, page=page)
@@ -974,7 +974,7 @@ class A2MAgnoBaseDb(BaseDb):
             pass
 
     def clear_cultural_knowledge(self) -> None:
-        self.client.delete_bulk(type="semantic", tags=["agno-culture"])
+        self.client.delete_bulk(type="semantic", tags=["a2m:culture"])
 
     # -----------------------------------------------------------------------
     # Learnings
@@ -988,7 +988,7 @@ class A2MAgnoBaseDb(BaseDb):
         team_id:    Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> list[str]:
-        tags = ["agno-learning", f"ltype:{learning_type}"]
+        tags = ["a2m:learning", f"ltype:{learning_type}"]
         if user_id:    tags.append(f"user:{user_id}")
         if agent_id:   tags.append(f"agent:{agent_id}")
         if team_id:    tags.append(f"team:{team_id}")
@@ -1062,7 +1062,7 @@ class A2MAgnoBaseDb(BaseDb):
         entity_type:  Optional[str]  = None,
         limit:        Optional[int]  = None,
     ) -> List[Dict[str, Any]]:
-        tags = ["agno-learning"]
+        tags = ["a2m:learning"]
         if learning_type: tags.append(f"ltype:{learning_type}")
         if user_id:       tags.append(f"user:{user_id}")
         if agent_id:      tags.append(f"agent:{agent_id}")
