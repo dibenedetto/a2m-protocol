@@ -1,4 +1,4 @@
-# A2M — AgentToMemory Protocol
+# Agent2Memory (A2M) Protocol
 
 > A shared memory protocol for AI agents across frameworks.
 

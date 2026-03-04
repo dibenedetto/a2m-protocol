@@ -1,4 +1,4 @@
-# A2M — AgentToMemory Protocol
+# Agent2Memory (A2M) Protocol
 # Core server + client (no heavy dependencies)
 fastapi>=0.110
 uvicorn[standard]>=0.29

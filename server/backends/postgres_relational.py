@@ -1,5 +1,5 @@
 """
-A2M — AgentToMemory Protocol
+Agent2Memory (A2M) Protocol
 PostgreSQL relational backend: PostgreSQLRelationalBackend.
 
 Implements AbstractRelationalBackend using PostgreSQL.

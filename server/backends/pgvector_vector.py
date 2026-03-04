@@ -1,5 +1,5 @@
 """
-A2M — AgentToMemory Protocol
+Agent2Memory (A2M) Protocol
 pgvector vector backend: PgVectorBackend.
 
 Implements AbstractVectorBackend using PostgreSQL + pgvector extension.

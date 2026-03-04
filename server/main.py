@@ -1,5 +1,5 @@
 """
-A2M — AgentToMemory Protocol
+Agent2Memory (A2M) Protocol
 FastAPI application entry point.
 
 Usage:

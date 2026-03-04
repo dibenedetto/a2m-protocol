@@ -1,5 +1,5 @@
 """
-A2M — AgentToMemory Protocol
+Agent2Memory (A2M) Protocol
 LangChain adapter: A2MLangChainBaseChatMessageHistory
 
 Implements LangChain's BaseChatMessageHistory interface (langchain-core ≥ 0.1).

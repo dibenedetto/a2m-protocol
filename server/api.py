@@ -1,5 +1,5 @@
 """
-A2M — AgentToMemory Protocol
+Agent2Memory (A2M) Protocol
 FastAPI router — all REST endpoints + WebSocket subscription.
 
 Namespace routing uses {namespace:path} so that namespaces containing "/" are

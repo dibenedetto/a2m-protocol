@@ -1,5 +1,5 @@
 """
-A2M — AgentToMemory Protocol
+Agent2Memory (A2M) Protocol
 ChromaDB vector backend: ChromaVectorBackend.
 
 Implements AbstractVectorBackend using ChromaDB for persistent or in-memory

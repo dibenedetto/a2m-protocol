@@ -1,5 +1,5 @@
 """
-A2M — AgentToMemory Protocol
+Agent2Memory (A2M) Protocol
 Python client library.
 
 Wraps the A2M REST API with a clean, namespace-scoped interface.

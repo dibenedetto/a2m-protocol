@@ -1,5 +1,5 @@
 """
-A2M — AgentToMemory Protocol
+Agent2Memory (A2M) Protocol
 Default SQLite relational backend: SQLiteRelationalBackend.
 
 Requires no external dependencies beyond the Python standard library.

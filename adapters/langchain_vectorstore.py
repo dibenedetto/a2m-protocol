@@ -1,5 +1,5 @@
 """
-A2M — AgentToMemory Protocol
+Agent2Memory (A2M) Protocol
 LangChain adapter: A2MLangChainVectorStore
 
 Implements LangChain's VectorStore abstract base class (langchain-core ≥ 0.1).

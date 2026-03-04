@@ -1,5 +1,5 @@
 """
-A2M — AgentToMemory Protocol
+Agent2Memory (A2M) Protocol
 Agno adapter: A2MAgnoVectorDb
 
 Concrete implementation of Agno's VectorDb abstract base class.

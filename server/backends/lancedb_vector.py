@@ -1,5 +1,5 @@
 """
-A2M — AgentToMemory Protocol
+Agent2Memory (A2M) Protocol
 LanceDB vector backend: LanceVectorBackend
 
 Implements AbstractVectorBackend using LanceDB for persistent ANN search.

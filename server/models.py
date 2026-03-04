@@ -1,5 +1,5 @@
 """
-A2M — AgentToMemory Protocol
+Agent2Memory (A2M) Protocol
 Pydantic models matching the wire format defined in §6 of the spec.
 """
 

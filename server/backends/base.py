@@ -1,5 +1,5 @@
 """
-A2M — AgentToMemory Protocol
+Agent2Memory (A2M) Protocol
 Abstract backend interfaces.
 
 Every A2M store consists of two pluggable backends:

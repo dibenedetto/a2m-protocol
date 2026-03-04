@@ -11,7 +11,7 @@ Setup:
 
 What this demonstrates:
     ┌──────────────────────────────────────────────────────────────────────┐
-    │  Relational backend  (A2MLangChainBaseChatMessageHistory)                           │
+    │  Relational backend  (A2MLangChainBaseChatMessageHistory)            │
     │  - Stores every conversation turn as an A2M episodic entry           │
     │  - Exact retrieval by namespace — no embeddings needed               │
     │  - Used by RunnableWithMessageHistory for multi-turn memory          │
@@ -28,7 +28,7 @@ Full chain data-flow:
         │
         ├─► embed_query ──► VectorStore.similarity_search ──► context docs   [Vector]
         │
-        ├─► history.messages ────────────────────────────────► past turns     [Relational]
+        ├─► history.messages ───────────────────────────────► past turns     [Relational]
         │
         ▼
     ChatPromptTemplate  (system + history + context + question)
@@ -37,7 +37,7 @@ Full chain data-flow:
     ChatModel  (FakeListChatModel / ChatOpenAI / ...)
         │
         ▼
-    AIMessage  ──► history.add_messages  ────────────────────► stored turn    [Relational]
+    AIMessage  ──► history.add_messages  ───────────────────► stored turn    [Relational]
 """
 
 import math

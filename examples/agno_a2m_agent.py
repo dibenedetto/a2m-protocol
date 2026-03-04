@@ -14,7 +14,7 @@ Setup:
 
 What this demonstrates:
     ┌──────────────────────────────────────────────────────────────────────┐
-    │  Relational backend  (A2MAgnoBaseDb)                               │
+    │  Relational backend  (A2MAgnoBaseDb)                                 │
     │  - Stores structured user facts (UserMemory objects)                 │
     │  - Exact key/tag lookup — no embeddings needed                       │
     │  - Used by Agno's MemoryManager for persistent user memories         │

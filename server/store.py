@@ -1,5 +1,5 @@
 """
-A2M — AgentToMemory Protocol
+Agent2Memory (A2M) Protocol
 Storage coordinator: A2MStore.
 
 A2MStore owns one AbstractRelationalBackend and one AbstractVectorBackend and

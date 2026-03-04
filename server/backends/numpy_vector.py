@@ -1,5 +1,5 @@
 """
-A2M — AgentToMemory Protocol
+Agent2Memory (A2M) Protocol
 Numpy vector backend: NumpyVectorBackend.
 
 In-memory ANN search using numpy cosine similarity.  When a path is provided,
