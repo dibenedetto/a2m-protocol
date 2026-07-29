@@ -560,6 +560,112 @@ def test_sessions() -> None:
 			check(f"{method} without 'sessions' is refused", exc.code == -32003, exc.code)
 
 
+def test_keys() -> None:
+	print("== keys ==")
+
+	stack = MemoryStack()
+	first = stack.remember("the user lives in bologna", key="user/city")
+	again = stack.remember("the user lives in milan",  key="user/city")
+
+	check("a key addresses one record"      , first.id == again.id)
+	check("writing replaces, not appends"   , stack.count() == 1, stack.count())
+	check("content is the new one"          , stack.by_key("user/city").content.endswith("milan"))
+	check("revision advances"               , again.revision == 1, again.revision)
+	check("the stale fact is gone"          , stack.recall("bologna") == [], stack.recall("bologna"))
+
+	# Hierarchy without a second addressing dimension.
+	for k in ["myapp/wf-42/user/city", "myapp/wf-42/user/goal", "myapp/wf-7/user/city", "other/thing"]:
+		stack.remember("x for " + k, key=k)
+
+	check("a prefix scopes a read",
+	      sorted(r.key for r in stack.timeline(key_prefix="myapp/wf-42/"))
+	      == ["myapp/wf-42/user/city", "myapp/wf-42/user/goal"])
+	check("a shorter prefix scopes wider" , len(stack.timeline(key_prefix="myapp/")) == 3)
+	check("a prefix can be forgotten"     , stack.forget(key_prefix="myapp/wf-7/") == 1)
+	check("unused keys read as absent"    , stack.by_key("nothing/here") is None)
+
+	# Keys are per owner, so two agents do not collide.
+	shared = MemoryStack()
+	shared.remember("bologna", key="user/city", owner="alice")
+	shared.remember("milan",   key="user/city", owner="bob")
+	check("keys are scoped per owner",
+	      (shared.by_key("user/city", "alice").content,
+	       shared.by_key("user/city", "bob").content) == ("bologna", "milan"))
+
+	# Over the wire.
+	memory = connect_local(MemoryStack())
+	check("keys is declared", "keys" in memory.capabilities(), memory.capabilities())
+	memory.remember("first value", key="a/b")
+	memory.remember("second value", key="a/b")
+	fetched = memory.fetch("a/b")
+	check("fetch over the wire", fetched and fetched["content"] == "second value", fetched)
+	check("revision on the wire", fetched["revision"] == 1, fetched)
+	check("fetch of an unused key", memory.fetch("no/such/key") is None)
+
+	limited = connect_local(MemoryStack(), capabilities=["core"])
+	for label, call in [("remember with a key", lambda: limited.remember("x", key="a/b")),
+	                    ("fetch"              , lambda: limited.fetch("a/b")),
+	                    ("key_prefix"         , lambda: limited.timeline(key_prefix="a/"))]:
+		try:
+			call()
+			check(f"{label} without 'keys' is refused", False)
+		except JsonRpcError as exc:
+			check(f"{label} without 'keys' is refused", exc.code == -32003, exc.code)
+
+
+def test_caller_embeddings() -> None:
+	print("== caller-owned embeddings ==")
+
+	# A store with no embedder at all still answers vector searches.
+	stack = MemoryStack(scorer=EmbeddingScorer(None))
+	near  = stack.remember("the user is called marco", key="user/name", embedding=[1.0, 0.0, 0.0])
+	stack.remember("the office is in milan", key="org/office", embedding=[0.0, 1.0, 0.0])
+
+	check("no model is configured"     , stack.scorer.embed is None)
+	check("the vector is stored verbatim", stack.by_key("user/name").embedding == [1.0, 0.0, 0.0])
+
+	hits = stack.recall(embedding=[0.95, 0.05, 0.0], limit=1)
+	check("a query vector searches"    , hits and hits[0][0].id == near.id, hits)
+	check("without any text query"     , hits and hits[0][0].content.endswith("marco"))
+
+	# A supplied vector is never regenerated, even when an embedder exists.
+	calls = []
+	def counting(texts):
+		calls.append(list(texts))
+		return [[0.0, 0.0, 1.0] for _ in texts]
+
+	both = MemoryStack(scorer=EmbeddingScorer(counting))
+	both.remember("carries its own vector", embedding=[1.0, 0.0, 0.0])
+	both.recall(embedding=[1.0, 0.0, 0.0])
+	check("a caller's vector is never re-embedded",
+	      all("carries its own vector" not in batch for batch in calls), calls)
+
+	# Over the wire, including the contract and the mismatch rule.
+	memory = connect_local(MemoryStack(scorer=EmbeddingScorer(None)))
+	check("embeddings is declared", "embeddings" in memory.capabilities())
+	check("a contract is reported" , memory.describe()["embeddings"]["metric"] == "cosine")
+
+	memory.remember("vector probe", embedding=[1.0, 0.0, 0.0])
+	back = memory.recall(embedding=[1.0, 0.0, 0.0], limit=1, embeddings=True)
+	check("the vector round-trips", back and back[0]["embedding"] == [1.0, 0.0, 0.0], back)
+	check("dimensionality is reported", memory.describe(refresh=True)["embeddings"]["dimensions"] == 3)
+	check("vectors are omitted by default",
+	      "embedding" not in memory.recall(embedding=[1.0, 0.0, 0.0], limit=1)[0])
+
+	try:
+		memory.remember("wrong width", embedding=[1.0, 2.0])
+		check("a mismatched width is refused", False)
+	except JsonRpcError as exc:
+		check("a mismatched width is refused", exc.code == -32008, exc.code)
+
+	limited = connect_local(MemoryStack(), capabilities=["core"])
+	try:
+		limited.remember("x", embedding=[1.0])
+		check("embeddings without the capability are refused", False)
+	except JsonRpcError as exc:
+		check("embeddings without the capability are refused", exc.code == -32003, exc.code)
+
+
 def test_a2m_local() -> None:
 	print("== a2m, in-process ==")
 
@@ -718,6 +824,8 @@ def main() -> int:
 	test_concurrency()
 	test_sharing()
 	test_sessions()
+	test_keys()
+	test_caller_embeddings()
 	test_a2m_local()
 	test_a2m_spec()
 	test_a2m_http()

@@ -102,6 +102,9 @@ class MemoryRecord:
 		created_at : float          = None,
 		owner      : str            = None,
 		session    : str            = None,
+		key        : str            = None,
+		embedding  : list[float]    = None,
+		revision   : int            = 0,
 	) -> None:
 		"""Create one remembered thing.
 
@@ -140,6 +143,19 @@ class MemoryRecord:
 		# share one working tier and evict each other's context.
 		self.session      = session
 
+		# A caller-chosen address, slash-delimited by convention:
+		# "myapp/wf-42/user/city". Writing to a key that already holds a record
+		# *replaces* it rather than adding another, which is the difference between
+		# a memory that can be corrected and one that can only be appended to.
+		self.key          = key
+		self.revision     = int(revision)
+
+		# A caller-supplied vector, stored verbatim. The store never generates it
+		# and never replaces it. That is what keeps A2M model-agnostic: two
+		# frameworks embedding with different models can share one store without
+		# silently comparing numbers from incomparable spaces.
+		self.embedding    = list(embedding) if embedding else None
+
 
 	def touch(self, now: float = None) -> None:
 		"""Mark the record as just recalled.
@@ -161,7 +177,7 @@ class MemoryRecord:
 		self.access_count += 1
 
 
-	def to_dict(self, score: float = None) -> dict[str, Any]:
+	def to_dict(self, score: float = None, embedding: bool = False) -> dict[str, Any]:
 		"""The A2M wire form of this record.
 
 		Timestamps become RFC 3339 strings here rather than the floats used
@@ -192,9 +208,17 @@ class MemoryRecord:
 			"access_count" : self.access_count,
 			"owner"        : self.owner,
 			"session"      : self.session,
+			"key"          : self.key,
+			"revision"     : self.revision,
 		}
 		if score is not None:
 			record["score"] = score
+
+		# Vectors are large and almost never wanted, so they are opt-in. A client
+		# checking that its embedding was stored verbatim asks for them.
+		if embedding and self.embedding:
+			record["embedding"] = list(self.embedding)
+
 		return record
 
 
@@ -518,9 +542,9 @@ class MemoryStack:
 		owner    : str            = None,
 		id       : str            = None,
 		session  : str            = None,
+		key      : str            = None,
+		embedding: list[float]    = None,
 	) -> MemoryRecord:
-		# A client-supplied id makes the write idempotent, which is the only thing
-		# standing between a retried request and a duplicated memory.
 		"""Write one record.
 
 		Args:
@@ -556,11 +580,37 @@ class MemoryStack:
 			>>> first.id == second.id and stack.count() == 1
 			True
 		"""
+		# A client-supplied id makes the write idempotent, which is the only thing
+		# standing between a retried request and a duplicated memory.
 		if id is not None:
 			with self._lock:
 				existing = self.records.get(id, None)
 			if existing is not None:
 				return existing
+
+		# A key *addresses* a record rather than identifying a write, so writing to
+		# an occupied key replaces what is there. That is the difference between a
+		# memory that can be corrected and one that can only be appended to: when
+		# the user moves city, the old fact must stop being recalled, not merely be
+		# outnumbered.
+		if key is not None:
+			held = self.by_key(key, owner)
+			if held is not None:
+				with self._lock:
+					held.content   = content
+					held.revision += 1
+					held.role      = role
+					if metadata is not None:
+						held.metadata = dict(metadata)
+					if embedding is not None:
+						held.embedding = list(embedding)
+					if tier is not None:
+						held.tier = self.tier(tier).name
+					held.salience   = float(salience)
+					held.accessed_at = time.time()
+					self.scorer.drop(held.id)
+					self.scorer.index(held)
+				return held
 
 		tier   = tier or self.working
 		record = MemoryRecord(
@@ -569,10 +619,12 @@ class MemoryStack:
 			role     = role,
 			salience = salience,
 			group    = group,
-			metadata = metadata,
-			owner    = owner,
-			session  = session,
-			id       = id,
+			metadata  = metadata,
+			owner     = owner,
+			session   = session,
+			key       = key,
+			embedding = embedding,
+			id        = id,
 		)
 
 		with self._lock:
@@ -599,7 +651,7 @@ class MemoryStack:
 
 
 	def timeline(self, tier: str = None, limit: int = 0, agent: str = None,
-	             where: dict[str, Any] = None) -> list[MemoryRecord]:
+	             where: dict[str, Any] = None, key_prefix: str = None) -> list[MemoryRecord]:
 		"""Read records in creation order, oldest first.
 
 		Separate from 'recall' on purpose: relevance order is what a search wants,
@@ -628,7 +680,8 @@ class MemoryStack:
 		with self._lock:
 			records = [
 				r for r in self.records.values()
-				if (tier is None or r.tier == tier) and self.visible(r, agent) and self._matches(r, where)
+				if (tier is None or r.tier == tier) and self.visible(r, agent)
+				and self._matches(r, where) and self._under(r, key_prefix)
 			]
 
 		records.sort(key=lambda r: r.created_at)
@@ -645,6 +698,8 @@ class MemoryStack:
 		touch     : bool           = True,
 		now       : float          = None,
 		agent     : str            = None,
+		embedding : list[float]    = None,
+		key_prefix: str            = None,
 	) -> list[tuple[MemoryRecord, float]]:
 		"""Search by relevance. **This is the method that matters.**
 
@@ -691,6 +746,7 @@ class MemoryStack:
 				if (tier is None or r.tier == tier)
 				and self.visible(r, agent)
 				and self._matches(r, where)
+				and self._under(r, key_prefix)
 			]
 
 		if not candidates:
@@ -698,7 +754,7 @@ class MemoryStack:
 
 		# Deliberately outside the lock: an EmbeddingScorer calls out to a model
 		# here, and no other agent should have to wait on that to write a message.
-		relevance = self.scorer.relevance(query, candidates)
+		relevance = self.scorer.relevance(query, candidates, embedding)
 
 		scored = []
 		if relevance is None:
@@ -707,7 +763,7 @@ class MemoryStack:
 				scored.append((record, self._blend(0.0, record, now)))
 		else:
 			for record in candidates:
-				score = relevance.get(record.id, 0.0)
+				score = (relevance or {}).get(record.id, 0.0)
 				if score > 0.0:
 					scored.append((record, self._blend(score, record, now)))
 
@@ -731,6 +787,7 @@ class MemoryStack:
 		tier  : str            = None,
 		where : dict[str, Any] = None,
 		agent : str            = None,
+		key_prefix: str        = None,
 	) -> int:
 		"""Delete records.
 
@@ -760,8 +817,9 @@ class MemoryStack:
 					if id in self.records and self.visible(self.records[id], agent)
 				)
 
-		if query or where or (tier and not ids):
-			for record, _ in self.recall(query=query, tier=tier, where=where, limit=0, touch=False, agent=agent):
+		if query or where or key_prefix or (tier and not ids):
+			for record, _ in self.recall(query=query, tier=tier, where=where, limit=0,
+			                             touch=False, agent=agent, key_prefix=key_prefix):
 				targets.add(record.id)
 
 		with self._lock:
@@ -1117,6 +1175,52 @@ class MemoryStack:
 		"""
 		with self._lock:
 			return [r for r in self.records.values() if self.visible(r, agent)]
+
+
+	def by_key(self, key: str, agent: str = None) -> MemoryRecord | None:
+		"""The record addressed by a key.
+
+		Keys are unique per owner, so two agents may each hold their own
+		"user/city" without colliding.
+
+		Args:
+			key (str): The address, slash-delimited by convention.
+			agent (str, optional): Whose key.
+
+		Returns:
+			MemoryRecord | None: The record, or None if the key is empty.
+
+		Example:
+			>>> stack = MemoryStack()
+			>>> _ = stack.remember("bologna", key="user/city")
+			>>> stack.by_key("user/city").content
+			'bologna'
+		"""
+		with self._lock:
+			for record in self.records.values():
+				if record.key == key and record.owner == agent:
+					return record
+		return None
+
+
+	def _under(self, record: MemoryRecord, prefix: str = None) -> bool:
+		"""Whether a record's key sits under a prefix.
+
+		This is what makes keys hierarchical: "myapp/wf-42/" matches everything
+		beneath it, which is the recursive scope read a separate namespace field
+		would have provided -- without a second addressing dimension to keep in
+		sync with the first.
+
+		Args:
+			record (MemoryRecord): The candidate.
+			prefix (str, optional): A key prefix. Absent matches everything.
+
+		Returns:
+			bool: True if the record is at or under the prefix.
+		"""
+		if not prefix:
+			return True
+		return bool(record.key) and record.key.startswith(prefix)
 
 
 	def _matches(self, record: MemoryRecord, where: dict[str, Any] = None) -> bool:

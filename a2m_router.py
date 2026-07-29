@@ -299,7 +299,7 @@ class MemoryRouter:
 		if not self.order:
 			raise ValueError("No backend matches any configured tier")
 
-		self.capabilities = ["core", "tiers", "salience", "scopes", "sessions"]
+		self.capabilities = ["core", "tiers", "salience", "scopes", "sessions", "keys", "embeddings"]
 		self.methods      = [m for c in self.capabilities for m in A2M_CAPABILITIES.get(c, [])]
 
 		self.dispatcher = Dispatcher()
@@ -314,6 +314,7 @@ class MemoryRouter:
 			"memory/reinforce"   : self.reinforce,
 			"memory/session/list": self.session_list,
 			"memory/session/close": self.session_close,
+			"memory/fetch"       : self.fetch,
 		}
 		for method, handler in handlers.items():
 			self.dispatcher.register(method, handler)
@@ -360,7 +361,8 @@ class MemoryRouter:
 		return params
 
 
-	def _records(self, tier: str, owner: str = None, where: dict[str, Any] = None) -> list[dict]:
+	def _records(self, tier: str, owner: str = None, where: dict[str, Any] = None,
+	             key_prefix: str = None) -> list[dict]:
 		"""Every record in one backend, chronologically.
 
 		Args:
@@ -374,6 +376,8 @@ class MemoryRouter:
 		params = {"tier": tier, "limit": 0}
 		if where is not None:
 			params["where"] = where
+		if key_prefix is not None:
+			params["key_prefix"] = key_prefix
 		return self._call(tier, "memory/timeline", self._scoped(params, owner)).get("records", [])
 
 
@@ -414,10 +418,37 @@ class MemoryRouter:
 			                  if any(self.tiers[n].kind == k for n in self.order)},
 			"working"      : self.working(),
 			"limits"       : {"max_records_per_call": 256},
+			"embeddings"   : self._embedding_profile(),
 			"total"        : sum(t["count"] for t in tiers),
 			"scorer"       : {"scorer": "router", "merge": self.merge.name,
 			                  "backends": {n: type(self.backends[n]).__name__ for n in self.order}},
 		}
+
+
+	def _embedding_profile(self) -> dict[str, Any]:
+		"""The vector contract, gathered from the backends.
+
+		A federation is only coherent if its backends agree on what a vector is:
+		the same record can spill from one to another, and a width that changed on
+		the way across would make it silently unrankable. So a disagreement is
+		reported rather than averaged away -- there is no sensible middle value
+		between 768 and 1024 dimensions.
+
+		Returns:
+			dict: 'dimensions', 'metric' and 'model', plus 'disagreement' listing
+			every distinct width the backends reported when they do not match.
+		"""
+		seen = []
+		for name in self.order:
+			contract = self._call(name, "memory/describe", {}).get("embeddings") or {}
+			if contract.get("dimensions") is not None:
+				seen.append(contract["dimensions"])
+
+		profile = {"dimensions": seen[0] if seen else None, "metric": "cosine", "model": None}
+		if len(set(seen)) > 1:
+			profile["disagreement"] = sorted(set(seen))
+
+		return profile
 
 
 	def working(self) -> str:
@@ -497,6 +528,9 @@ class MemoryRouter:
 		where     : dict[str, Any] = None,
 		min_score : float          = 0.0,
 		owner     : str            = None,
+		embedding : list[float]    = None,
+		key_prefix: str            = None,
+		embeddings: bool           = False,
 		**ignored : Any,
 	) -> dict[str, Any]:
 		"""Fan the search out and merge what comes back.
@@ -542,6 +576,12 @@ class MemoryRouter:
 				params["query"] = query
 			if where is not None:
 				params["where"] = where
+			if embedding is not None:
+				params["embedding"] = list(embedding)
+			if key_prefix is not None:
+				params["key_prefix"] = key_prefix
+			if embeddings:
+				params["embeddings"] = True
 
 			results[name] = self._call(name, "memory/recall", self._scoped(params, owner)).get("records", [])
 
@@ -560,7 +600,8 @@ class MemoryRouter:
 
 
 	def timeline(self, tier: str = None, limit: int = 0, owner: str = None,
-	             where: dict[str, Any] = None, **ignored: Any) -> dict[str, Any]:
+	             where: dict[str, Any] = None, key_prefix: str = None,
+	             embeddings: bool = False, **ignored: Any) -> dict[str, Any]:
 		"""Gather records from every backend in creation order.
 
 		Args:
@@ -584,7 +625,7 @@ class MemoryRouter:
 
 		records = []
 		for name in names:
-			records.extend(self._records(name, owner, where))
+			records.extend(self._records(name, owner, where, key_prefix))
 
 		# created_at is RFC 3339, so lexicographic order is chronological order.
 		records.sort(key=lambda r: r.get("created_at", ""))
@@ -601,6 +642,7 @@ class MemoryRouter:
 		tier  : str            = None,
 		where : dict[str, Any] = None,
 		owner : str            = None,
+		key_prefix: str        = None,
 		**ignored : Any,
 	) -> dict[str, Any]:
 		"""Delete from every backend in scope.
@@ -619,8 +661,8 @@ class MemoryRouter:
 		Raises:
 			JsonRpcError: -32602 when no selector is given.
 		"""
-		if not any([ids, query, tier, where]):
-			raise JsonRpcError(INVALID_PARAMS, "Refusing to forget everything: pass ids, query, tier or where")
+		if not any([ids, query, tier, where, key_prefix]):
+			raise JsonRpcError(INVALID_PARAMS, "Refusing to forget everything: pass ids, query, tier, where or key_prefix")
 
 		names     = [tier] if tier else list(self.order)
 		forgotten = 0
@@ -636,6 +678,8 @@ class MemoryRouter:
 				params["query"] = query
 			if where is not None:
 				params["where"] = where
+			if key_prefix is not None:
+				params["key_prefix"] = key_prefix
 
 			forgotten += self._call(name, "memory/forget", self._scoped(params, owner)).get("forgotten", 0)
 
@@ -712,6 +756,7 @@ class MemoryRouter:
 			"salience" : float(r.get("salience", 1.0)) + salience,
 			"owner"    : r.get("owner"),
 			"session"  : r.get("session"),
+			"key"      : r.get("key"),
 			"tier"     : target,
 		} for r in records]
 
@@ -787,6 +832,36 @@ class MemoryRouter:
 
 		report = self.consolidate()
 		return dict(report, closed=session, flushed=flushed)
+
+
+	def fetch(self, key: str, owner: str = None, embeddings: bool = False, **ignored: Any) -> dict[str, Any]:
+		"""Handle 'memory/fetch' -- find the record at an address, in any backend.
+
+		A key is unique per owner across the whole stack, not per tier, so this
+		asks each backend in turn and stops at the first hit.
+
+		Args:
+			key (str): The address.
+			owner (str, optional): Whose key.
+			embeddings (bool, optional): Include the stored vector.
+			**ignored: Unrecognised parameters are ignored.
+
+		Returns:
+			dict: {'record': ...} or {'record': None}.
+
+		Raises:
+			JsonRpcError: -32602 if 'key' is missing.
+		"""
+		if not key:
+			raise JsonRpcError(INVALID_PARAMS, "'key' is required")
+
+		for name in self.order:
+			found = self._call(name, "memory/fetch",
+			                   self._scoped({"key": key, "embeddings": embeddings}, owner)).get("record")
+			if found:
+				return {"record": found}
+
+		return {"record": None}
 
 
 	def consolidate(self, **ignored: Any) -> dict[str, Any]:

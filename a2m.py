@@ -18,6 +18,8 @@ a service across the network.
 	salience  memory/reinforce   raise the salience of records that proved useful
 	sessions  memory/session/list   which conversations exist
 	          memory/session/close  end one and let it percolate down the stack
+	keys      memory/fetch          read the record at an address
+	embeddings                      caller-owned vectors, stored verbatim
 
 This server declares every capability. A store that cannot do tiers or salience
 is still conformant if it declares only `core` — see a2m_minimal.py, which is
@@ -50,6 +52,7 @@ READ_ONLY                = -32004
 SCOPE_DENIED             = -32005
 QUOTA_EXCEEDED           = -32006
 PROTOCOL_NOT_SUPPORTED   = -32007
+EMBEDDING_MISMATCH       = -32008
 
 # Which capability each method belongs to. A server must answer a call into an
 # undeclared capability with CAPABILITY_NOT_SUPPORTED rather than
@@ -58,9 +61,11 @@ A2M_CAPABILITIES = {
 	"core"     : ["memory/describe", "memory/remember", "memory/recall", "memory/timeline", "memory/forget"],
 	"tiers"    : ["memory/promote", "memory/consolidate"],
 	"salience" : ["memory/reinforce"],
-	"scopes"   : [],
-	"sessions" : ["memory/session/list", "memory/session/close"],
-	"events"   : [],
+	"scopes"     : [],
+	"sessions"   : ["memory/session/list", "memory/session/close"],
+	"embeddings" : [],
+	"keys"       : ["memory/fetch"],
+	"events"     : [],
 }
 
 A2M_METHODS = [method for methods in A2M_CAPABILITIES.values() for method in methods]
@@ -86,6 +91,8 @@ class MemoryServer:
 		name                 : str         = "agent-memory",
 		capabilities         : list[str]   = None,
 		max_records_per_call : int         = 256,
+		dimensions           : int         = None,
+		embedding_model      : str         = None,
 	) -> None:
 		"""Wrap a store as an A2M server.
 
@@ -107,6 +114,8 @@ class MemoryServer:
 		self.name                 = name
 		self.capabilities         = list(capabilities) if capabilities else list(A2M_CAPABILITIES)
 		self.max_records_per_call = int(max_records_per_call)
+		self.dimensions           = dimensions
+		self.embedding_model      = embedding_model
 		self.dispatcher           = Dispatcher()
 
 		if "core" not in self.capabilities:
@@ -125,6 +134,7 @@ class MemoryServer:
 			"memory/reinforce"   : self.reinforce,
 			"memory/session/list": self.session_list,
 			"memory/session/close": self.session_close,
+			"memory/fetch"       : self.fetch,
 		}
 
 		# Every A2M method is registered, including those of undeclared
@@ -215,6 +225,7 @@ class MemoryServer:
 			"methods"      : sorted(self.methods),
 			"tiers"        : described.get("tiers", []),
 			"limits"       : {"max_records_per_call": self.max_records_per_call},
+			"embeddings"   : self._embedding_profile() if self.supports("embeddings") else None,
 			"scorer"       : described.get("scorer", None),
 			"total"        : described.get("total", 0),
 			"working"      : described.get("working", None),
@@ -265,6 +276,17 @@ class MemoryServer:
 			if entry.get("tier", None) is not None and not self.supports("tiers"):
 				raise JsonRpcError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'tiers' capability")
 
+			# Silently dropping a key or a vector is worse than refusing it: the
+			# caller would believe it had addressed a record, or stored a
+			# comparable embedding, and neither would be true.
+			if entry.get("key", None) is not None and not self.supports("keys"):
+				raise JsonRpcError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'keys' capability")
+
+			if entry.get("embedding", None) is not None:
+				if not self.supports("embeddings"):
+					raise JsonRpcError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'embeddings' capability")
+				self._check_dimensions(entry["embedding"])
+
 			try:
 				stored = self.stack.remember(
 					content  = entry["content"],
@@ -275,6 +297,8 @@ class MemoryServer:
 					metadata = entry.get("metadata", None  ),
 					owner    = entry.get("owner"   , owner ),
 					session  = entry.get("session" , session),
+					key      = entry.get("key"     , None  ),
+					embedding= entry.get("embedding", None ),
 					id       = entry.get("id"      , None  ),
 				)
 			except KeyError as exc:
@@ -293,6 +317,9 @@ class MemoryServer:
 		where     : dict[str, Any] = None,
 		min_score : float          = 0.0,
 		owner     : str            = None,
+		embedding : list[float]    = None,
+		key_prefix: str            = None,
+		embeddings: bool           = False,
 		**ignored : Any,
 	) -> dict[str, Any]:
 		"""Handle 'memory/recall' -- relevance-ordered search.
@@ -312,6 +339,14 @@ class MemoryServer:
 		Raises:
 			JsonRpcError: -32002 for an unknown tier.
 		"""
+		if embedding is not None:
+			if not self.supports("embeddings"):
+				raise JsonRpcError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'embeddings' capability")
+			self._check_dimensions(embedding)
+
+		if key_prefix is not None and not self.supports("keys"):
+			raise JsonRpcError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'keys' capability")
+
 		try:
 			scored = self.stack.recall(
 				query     = query,
@@ -320,15 +355,18 @@ class MemoryServer:
 				where     = where,
 				min_score = min_score,
 				agent     = owner,
+				embedding = embedding,
+				key_prefix= key_prefix,
 			)
 		except KeyError as exc:
 			raise JsonRpcError(UNKNOWN_TIER, str(exc))
 
-		return {"records": [record.to_dict(score) for record, score in scored]}
+		return {"records": [record.to_dict(score, embeddings) for record, score in scored]}
 
 
 	def timeline(self, tier: str = None, limit: int = 0, owner: str = None,
-	             where: dict[str, Any] = None, **ignored: Any) -> dict[str, Any]:
+	             where: dict[str, Any] = None, key_prefix: str = None,
+	             embeddings: bool = False, **ignored: Any) -> dict[str, Any]:
 		"""Handle 'memory/timeline' -- creation-ordered read.
 
 		Args:
@@ -342,8 +380,15 @@ class MemoryServer:
 		Returns:
 			dict: 'records', ascending by created_at.
 		"""
-		records = self.stack.timeline(tier=tier, limit=limit, agent=owner, where=where)
-		return {"records": [record.to_dict() for record in records]}
+	def timeline(self, tier: str = None, limit: int = 0, owner: str = None,
+	             where: dict[str, Any] = None, key_prefix: str = None,
+	             embeddings: bool = False, **ignored: Any) -> dict[str, Any]:
+		if key_prefix is not None and not self.supports("keys"):
+			raise JsonRpcError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'keys' capability")
+
+		records = self.stack.timeline(tier=tier, limit=limit, agent=owner,
+		                              where=where, key_prefix=key_prefix)
+		return {"records": [record.to_dict(embedding=embeddings) for record in records]}
 
 
 	def reinforce(self, ids: list[str], amount: float = 0.5, owner: str = None, **ignored: Any) -> dict[str, Any]:
@@ -390,6 +435,7 @@ class MemoryServer:
 		tier  : str            = None,
 		where : dict[str, Any] = None,
 		owner : str            = None,
+		key_prefix: str        = None,
 		**ignored : Any,
 	) -> dict[str, Any]:
 		"""Handle 'memory/forget' -- delete records.
@@ -409,10 +455,14 @@ class MemoryServer:
 			JsonRpcError: -32602 when no selector is given at all. Emptying a store
 				must take more than an empty request.
 		"""
-		if not any([ids, query, tier, where]):
-			raise JsonRpcError(INVALID_PARAMS, "Refusing to forget everything: pass ids, query, tier or where")
+		if not any([ids, query, tier, where, key_prefix]):
+			raise JsonRpcError(INVALID_PARAMS, "Refusing to forget everything: pass ids, query, tier, where or key_prefix")
 
-		return {"forgotten": self.stack.forget(ids=ids, query=query, tier=tier, where=where, agent=owner)}
+		if key_prefix is not None and not self.supports("keys"):
+			raise JsonRpcError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'keys' capability")
+
+		return {"forgotten": self.stack.forget(ids=ids, query=query, tier=tier, where=where,
+		                                       agent=owner, key_prefix=key_prefix)}
 
 
 	def session_list(self, owner: str = None, **ignored: Any) -> dict[str, Any]:
@@ -449,6 +499,77 @@ class MemoryServer:
 		if not session:
 			raise JsonRpcError(INVALID_PARAMS, "'session' is required")
 		return self.stack.close_session(session, agent=owner)
+
+
+	def fetch(self, key: str, owner: str = None, embeddings: bool = False, **ignored: Any) -> dict[str, Any]:
+		"""Handle 'memory/fetch' -- read the record at an address.
+
+		Args:
+			key (str): The address to read.
+			owner (str, optional): Whose key. Keys are unique per owner.
+			embeddings (bool, optional): Include the stored vector.
+			**ignored: Unrecognised parameters are ignored.
+
+		Returns:
+			dict: {'record': ...} or {'record': None} when nothing is at that key.
+			An empty address is not an error -- it is the ordinary way to ask
+			whether a fact is known yet.
+
+		Raises:
+			JsonRpcError: -32602 if 'key' is missing.
+		"""
+		if not key:
+			raise JsonRpcError(INVALID_PARAMS, "'key' is required")
+
+		record = self.stack.by_key(key, agent=owner)
+		return {"record": record.to_dict(embedding=embeddings) if record else None}
+
+
+	def _embedding_profile(self) -> dict[str, Any]:
+		"""What vectors this server will accept.
+
+		A client must know the dimensionality before sending a vector, because
+		vectors of different widths -- or from different models -- cannot be
+		compared, and a store that mixes them ranks nonsense with confidence.
+
+		Returns:
+			dict: 'dimensions' (None until the first vector fixes it), 'metric',
+			and 'model' when the server has an opinion about which space it is in.
+		"""
+		return {
+			"dimensions" : self.dimensions,
+			"metric"     : "cosine",
+			"model"      : self.embedding_model,
+		}
+
+
+	def _check_dimensions(self, vector: list[float]) -> None:
+		"""Reject a vector that cannot be compared with what is already stored.
+
+		The first vector a store receives fixes its width. Everything after must
+		match, because cosine between vectors of different lengths is not a worse
+		answer -- it is not an answer.
+
+		Args:
+			vector (list[float]): The caller's embedding.
+
+		Raises:
+			JsonRpcError: -32602 if it is not a list of numbers, -32008 if its
+				width disagrees with the store's.
+		"""
+		if not isinstance(vector, list) or not all(isinstance(v, (int, float)) for v in vector):
+			raise JsonRpcError(INVALID_PARAMS, "'embedding' must be an array of numbers")
+
+		if self.dimensions is None:
+			self.dimensions = len(vector)
+			return
+
+		if len(vector) != self.dimensions:
+			raise JsonRpcError(
+				EMBEDDING_MISMATCH,
+				f"This store holds {self.dimensions}-dimensional vectors, got {len(vector)}",
+				{"expected": self.dimensions, "got": len(vector), "model": self.embedding_model},
+			)
 
 
 	def consolidate(self, **ignored: Any) -> dict[str, Any]:
@@ -615,6 +736,20 @@ class MemoryClient:
 		return [t["name"] for t in profile.get("tiers", []) if t.get("kind", None) == kind]
 
 
+	def fetch(self, key: str, embeddings: bool = False) -> dict[str, Any] | None:
+		"""Read the record at an address.
+
+		Args:
+			key (str): The address, e.g. "user/city".
+			embeddings (bool, optional): Include the stored vector.
+
+		Returns:
+			dict | None: The record, or None if nothing is at that key.
+		"""
+		params = self._scoped({"key": key, "embeddings": embeddings})
+		return self.client.call("memory/fetch", params).get("record", None)
+
+
 	def remember(self, content: str = None, records: list[dict[str, Any]] = None, **fields) -> list[str]:
 		"""Write one record, or a batch.
 
@@ -646,6 +781,9 @@ class MemoryClient:
 		limit     : int            = 8,
 		where     : dict[str, Any] = None,
 		min_score : float          = 0.0,
+		embedding : list[float]    = None,
+		key_prefix: str            = None,
+		embeddings: bool           = False,
 	) -> list[dict[str, Any]]:
 		"""Search by relevance.
 
@@ -662,6 +800,12 @@ class MemoryClient:
 			list[dict]: Records in wire form, descending by score.
 		"""
 		params = {"limit": limit, "min_score": min_score}
+		if embedding is not None:
+			params["embedding"] = list(embedding)
+		if key_prefix is not None:
+			params["key_prefix"] = key_prefix
+		if embeddings:
+			params["embeddings"] = True
 		if query is not None:
 			params["query"] = query
 		if tier is not None:
@@ -672,7 +816,8 @@ class MemoryClient:
 		return self.client.call("memory/recall", self._scoped(params)).get("records", [])
 
 
-	def timeline(self, tier: str = None, limit: int = 0, where: dict[str, Any] = None) -> list[dict[str, Any]]:
+	def timeline(self, tier: str = None, limit: int = 0, where: dict[str, Any] = None,
+	             key_prefix: str = None, embeddings: bool = False) -> list[dict[str, Any]]:
 		"""Read records in creation order.
 
 		Args:
@@ -689,6 +834,10 @@ class MemoryClient:
 			params["tier"] = tier
 		if where is not None:
 			params["where"] = where
+		if key_prefix is not None:
+			params["key_prefix"] = key_prefix
+		if embeddings:
+			params["embeddings"] = True
 
 		return self.client.call("memory/timeline", self._scoped(params)).get("records", [])
 
@@ -722,7 +871,8 @@ class MemoryClient:
 		return self.client.call("memory/promote", self._scoped(params)).get("promoted", 0)
 
 
-	def forget(self, ids: list[str] = None, query: str = None, tier: str = None, where: dict[str, Any] = None) -> int:
+	def forget(self, ids: list[str] = None, query: str = None, tier: str = None,
+	           where: dict[str, Any] = None, key_prefix: str = None) -> int:
 		"""Delete records.
 
 		Args:
@@ -735,6 +885,8 @@ class MemoryClient:
 			int: How many were removed.
 		"""
 		params = {}
+		if key_prefix is not None:
+			params["key_prefix"] = key_prefix
 		if ids is not None:
 			params["ids"] = list(ids)
 		if query is not None:

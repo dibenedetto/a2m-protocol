@@ -214,6 +214,9 @@ def to_record(row: sqlite3.Row, tier: str) -> MemoryRecord:
 		created_at = row["created_at"],
 		owner      = row["owner"],
 		session    = row["session"],
+		key        = row["akey"],
+		revision   = row["revision"],
+		embedding  = unpack(row["embedding"]) if row["embedding"] else None,
 	)
 	record.accessed_at  = row["accessed_at"]
 	record.access_count = row["access_count"]
@@ -232,6 +235,9 @@ COLUMNS = """
 	grp          TEXT,
 	owner        TEXT,
 	session      TEXT,
+	akey         TEXT,
+	revision     INTEGER NOT NULL DEFAULT 0,
+	embedding    BLOB,
 	salience     REAL    NOT NULL DEFAULT 1.0,
 	created_at   REAL    NOT NULL,
 	accessed_at  REAL    NOT NULL,
@@ -271,11 +277,13 @@ class WorkingStore(TierStore):
 		"""
 		self.db.execute(
 			"""INSERT OR IGNORE INTO working
-			   (id, content, role, metadata, grp, owner, session, salience, created_at, accessed_at, access_count)
-			   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+			   (id, content, role, metadata, grp, owner, session, akey, revision,
+			    embedding, salience, created_at, accessed_at, access_count)
+			   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
 			(record.id, record.content, record.role, json.dumps(record.metadata), record.group,
-			 record.owner, record.session, record.salience, record.created_at, record.accessed_at,
-			 record.access_count),
+			 record.owner, record.session, record.key, record.revision,
+			 pack(record.embedding) if record.embedding else None,
+			 record.salience, record.created_at, record.accessed_at, record.access_count),
 		)
 
 
@@ -377,7 +385,6 @@ class DurableStore(TierStore):
 			CREATE TABLE IF NOT EXISTS {self.TABLE} (
 				{COLUMNS},
 				tier      TEXT NOT NULL,
-				embedding BLOB,
 				seq       INTEGER
 			)""")
 		self.db.execute(f"CREATE INDEX IF NOT EXISTS durable_tier ON {self.TABLE}(tier, owner)")
@@ -411,12 +418,14 @@ class DurableStore(TierStore):
 		"""
 		self.db.execute(
 			f"""INSERT OR IGNORE INTO {self.TABLE}
-			    (id, content, role, metadata, grp, owner, session, salience, created_at, accessed_at,
-			     access_count, tier, embedding, seq)
-			    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+			    (id, content, role, metadata, grp, owner, session, akey, revision, embedding,
+			     salience, created_at, accessed_at, access_count, tier, seq)
+			    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
 			(record.id, record.content, record.role, json.dumps(record.metadata), record.group,
-			 record.owner, record.session, record.salience, record.created_at, record.accessed_at,
-			 record.access_count, record.tier, pack(embedding) if embedding else None,
+			 record.owner, record.session, record.key, record.revision,
+			 pack(embedding or record.embedding) if (embedding or record.embedding) else None,
+			 record.salience, record.created_at, record.accessed_at,
+			 record.access_count, record.tier,
 			 int(record.created_at * 1_000_000)),
 		)
 
@@ -606,12 +615,13 @@ class ProceduralStore(TierStore):
 
 		self.db.execute(
 			"""INSERT OR IGNORE INTO procedural
-			   (id, content, role, metadata, grp, owner, session, salience, created_at, accessed_at,
-			    access_count, path)
-			   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+			   (id, content, role, metadata, grp, owner, session, akey, revision, embedding,
+			    salience, created_at, accessed_at, access_count, path)
+			   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
 			(record.id, "", record.role, json.dumps(record.metadata), record.group, record.owner,
-			 record.session, record.salience, record.created_at, record.accessed_at,
-			 record.access_count, str(path)),
+			 record.session, record.key, record.revision,
+			 pack(record.embedding) if record.embedding else None, record.salience,
+			 record.created_at, record.accessed_at, record.access_count, str(path)),
 		)
 
 
@@ -891,6 +901,8 @@ class SqliteMemoryStack:
 		owner    : str            = None,
 		id       : str            = None,
 		session  : str            = None,
+		key      : str            = None,
+		embedding: list[float]    = None,
 	) -> MemoryRecord:
 		"""Write one record to the store that owns its tier.
 
@@ -920,6 +932,27 @@ class SqliteMemoryStack:
 				if existing is not None:
 					return existing
 
+			# Writing to an occupied key replaces what is there, so a corrected fact
+			# stops being recalled instead of merely being outnumbered by its
+			# successor.
+			if key is not None:
+				held = self.by_key(key, agent=owner)
+				if held is not None:
+					self.stores[held.tier].delete([held.id])
+					held.content   = content
+					held.revision += 1
+					held.role      = role
+					held.salience  = float(salience)
+					if metadata is not None:
+						held.metadata = dict(metadata)
+					if embedding is not None:
+						held.embedding = list(embedding)
+					if tier is not None:
+						held.tier = self.tier(tier).name
+					self._place(held)
+					self.db.commit()
+					return held
+
 			name  = tier or self.working
 			store = self.stores.get(name, None)
 			if store is None:
@@ -932,15 +965,17 @@ class SqliteMemoryStack:
 				salience = salience,
 				group    = group,
 				metadata = metadata,
-				owner    = owner,
-				session  = session,
-				id       = id,
+				owner     = owner,
+				session   = session,
+				key       = key,
+				embedding = embedding,
+				id        = id,
 			)
 
 			# Working memory is never embedded: it is replayed, not searched, and
 			# most of it is evicted having never been read by a query.
-			embedding = None
-			if isinstance(store, DurableStore) and str(content).strip():
+			# A caller-supplied vector is stored verbatim and never regenerated.
+			if embedding is None and isinstance(store, DurableStore) and str(content).strip():
 				vectors   = self._embed([content])
 				embedding = vectors[0] if vectors else None
 
@@ -1001,7 +1036,7 @@ class SqliteMemoryStack:
 
 
 	def timeline(self, tier: str = None, limit: int = 0, agent: str = None,
-	             where: dict[str, Any] = None) -> list[MemoryRecord]:
+	             where: dict[str, Any] = None, key_prefix: str = None) -> list[MemoryRecord]:
 		"""Read records in creation order.
 
 		Args:
@@ -1023,7 +1058,8 @@ class SqliteMemoryStack:
 			for name in names:
 				if name not in self.stores:
 					raise KeyError(f"Unknown tier '{name}'")
-				records.extend(r for r in self.stores[name].rows(agent) if self._matches(r, where))
+				records.extend(r for r in self.stores[name].rows(agent)
+				               if self._matches(r, where) and self._under(r, key_prefix))
 
 		records.sort(key=lambda r: r.created_at)
 		return records[-limit:] if limit and limit > 0 else records
@@ -1039,6 +1075,8 @@ class SqliteMemoryStack:
 		touch     : bool           = True,
 		now       : float          = None,
 		agent     : str            = None,
+		embedding : list[float]    = None,
+		key_prefix: str            = None,
 	) -> list[tuple[MemoryRecord, float]]:
 		"""Search by relevance, using the vector index when there is one.
 
@@ -1073,12 +1111,16 @@ class SqliteMemoryStack:
 			candidates : list[MemoryRecord] = []
 			relevance  : dict[str, float]   = {}
 
-			vectors = self._embed([query]) if query else None
-			vector  = vectors[0] if vectors else None
+			if embedding is not None:
+				vector = list(embedding)
+			else:
+				vectors = self._embed([query]) if query else None
+				vector  = vectors[0] if vectors else None
 
 			for name in names:
 				store = self.stores[name]
-				rows  = [r for r in store.rows(agent) if self._matches(r, where)]
+				rows  = [r for r in store.rows(agent)
+				         if self._matches(r, where) and self._under(r, key_prefix)]
 				candidates.extend(rows)
 
 				if vector is None or not isinstance(store, DurableStore):
@@ -1096,16 +1138,27 @@ class SqliteMemoryStack:
 			if not candidates:
 				return []
 
-			# Records with no vector -- everything in working, anything written
-			# before an embedder was configured -- still deserve a ranking, so the
-			# lexical scorer covers them.
+			# A record carrying its own vector is comparable wherever it lives --
+			# including working memory, which has no vector index. The store never
+			# generated that embedding, so it is not the store's business which
+			# tier it happens to sit in.
+			if vector is not None:
+				for record in candidates:
+					if record.embedding and record.id not in relevance:
+						relevance[record.id] = max(0.0, cosine(vector, record.embedding))
+
+			# Records with no vector -- most of working, anything written before an
+			# embedder was configured -- still deserve a ranking, so the lexical
+			# scorer covers them.
 			lexical = self.lexical.relevance(query, candidates) if query else None
+			if embedding is not None:
+				lexical = None
 			if lexical:
 				for id, score in lexical.items():
 					relevance[id] = max(relevance.get(id, 0.0), score)
 
 			scored = []
-			if query and (relevance or lexical is not None):
+			if (query or embedding is not None) and (relevance or lexical is not None):
 				for record in candidates:
 					score = relevance.get(record.id, 0.0)
 					if score > 0.0:
@@ -1138,6 +1191,7 @@ class SqliteMemoryStack:
 		tier  : str            = None,
 		where : dict[str, Any] = None,
 		agent : str            = None,
+		key_prefix: str        = None,
 	) -> int:
 		"""Delete records.
 
@@ -1156,8 +1210,9 @@ class SqliteMemoryStack:
 		if ids:
 			targets.update(ids)
 
-		if query or where or (tier and not ids):
-			for record, _ in self.recall(query=query, tier=tier, where=where, limit=0, touch=False, agent=agent):
+		if query or where or key_prefix or (tier and not ids):
+			for record, _ in self.recall(query=query, tier=tier, where=where, limit=0,
+			                             touch=False, agent=agent, key_prefix=key_prefix):
 				targets.add(record.id)
 
 		with self._lock:
@@ -1466,6 +1521,39 @@ class SqliteMemoryStack:
 					"stores"  : {n: type(s).__name__ for n, s in self.stores.items()},
 				},
 			}
+
+
+	def by_key(self, key: str, agent: str = None) -> MemoryRecord | None:
+		"""The record addressed by a key.
+
+		Args:
+			key (str): The address.
+			agent (str, optional): Whose key. Keys are unique per owner.
+
+		Returns:
+			MemoryRecord | None: The record, or None.
+		"""
+		with self._lock:
+			for store in self.stores.values():
+				for record in store.rows(agent):
+					if record.key == key and record.owner == agent:
+						return record
+		return None
+
+
+	def _under(self, record: MemoryRecord, prefix: str = None) -> bool:
+		"""Whether a record's key sits under a prefix.
+
+		Args:
+			record (MemoryRecord): The candidate.
+			prefix (str, optional): A key prefix.
+
+		Returns:
+			bool: True if at or under the prefix.
+		"""
+		if not prefix:
+			return True
+		return bool(record.key) and record.key.startswith(prefix)
 
 
 	def _matches(self, record: MemoryRecord, where: dict[str, Any] = None) -> bool:

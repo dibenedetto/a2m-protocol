@@ -113,13 +113,15 @@ class Scorer:
 		pass
 
 
-	def relevance(self, query: str, candidates: list[Any]) -> dict[str, float] | None:
+	def relevance(self, query: str, candidates: list[Any], vector: list[float] = None) -> dict[str, float] | None:
 		"""Rank candidates against a query.
 
 		Args:
 			query (str): What was asked.
 			candidates (list[MemoryRecord]): The records in scope, already filtered by
 				tier, owner and metadata.
+			vector (list[float], optional): A caller-supplied query embedding. A
+				scorer that cannot use one ignores it.
 
 		Returns:
 			dict[str, float] | None: Record id to relevance in 0..1, containing only
@@ -239,12 +241,13 @@ class LexicalScorer(Scorer):
 		return tokens
 
 
-	def relevance(self, query: str, candidates: list[Any]) -> dict[str, float] | None:
+	def relevance(self, query: str, candidates: list[Any], vector: list[float] = None) -> dict[str, float] | None:
 		"""Idf-weighted term overlap with saturating term frequency.
 
 		Args:
 			query (str): What was asked.
 			candidates (list[MemoryRecord]): Records in scope.
+			vector (list[float], optional): Ignored -- this scorer reads words.
 
 		Returns:
 			dict[str, float] | None: Ids to relevance, containing only records sharing
@@ -345,8 +348,17 @@ class EmbeddingScorer(Scorer):
 		self.vectors.pop(id, None)
 
 
-	def relevance(self, query: str, candidates: list[Any]) -> dict[str, float] | None:
+	def relevance(self, query: str, candidates: list[Any], vector: list[float] = None) -> dict[str, float] | None:
 		"""Cosine similarity over embeddings.
+
+		A record carrying its own `embedding` is ranked with that vector, verbatim.
+		This scorer never regenerates or replaces a caller-supplied embedding, which
+		is what lets two frameworks using different models share one store: whoever
+		wrote a record owns the space it is compared in.
+
+		With `vector` supplied, no model is called for the query either -- so a
+		store with no embedder at all still answers vector searches. That is the
+		fully caller-owned case.
 
 		Records are embedded lazily and in one batch here rather than on write. Writes
 		happen on every message; recalls are rarer and can amortise the whole backlog
@@ -365,15 +377,24 @@ class EmbeddingScorer(Scorer):
 			from retrieval import EmbeddingScorer, ollama_embedder
 			MemoryStack(scorer=EmbeddingScorer(ollama_embedder()))
 		"""
-		if not query or not str(query).strip():
+		asked = list(vector) if vector else None
+
+		if asked is None and (not query or not str(query).strip() or self.embed is None):
 			return None
 
-		missing = [r for r in candidates if r.id not in self.vectors and str(r.content).strip()]
-		if missing:
-			for record, vector in zip(missing, self.embed([str(r.content) for r in missing])):
-				self.vectors[record.id] = list(vector)
+		# Caller-supplied vectors win, always, and are never overwritten.
+		for record in candidates:
+			own = getattr(record, "embedding", None)
+			if own:
+				self.vectors[record.id] = list(own)
 
-		vector = self.embed([str(query)])[0]
+		if self.embed is not None:
+			missing = [r for r in candidates if r.id not in self.vectors and str(r.content).strip()]
+			if missing:
+				for record, made in zip(missing, self.embed([str(r.content) for r in missing])):
+					self.vectors[record.id] = list(made)
+
+		vector = asked if asked is not None else self.embed([str(query)])[0]
 
 		scores = {}
 		for record in candidates:
@@ -449,7 +470,7 @@ class HybridScorer(Scorer):
 			scorer.drop(id)
 
 
-	def relevance(self, query: str, candidates: list[Any]) -> dict[str, float] | None:
+	def relevance(self, query: str, candidates: list[Any], vector: list[float] = None) -> dict[str, float] | None:
 		"""Weighted union of the component scorers.
 
 		A union, not an intersection: a record that only the embedding pass found
@@ -466,7 +487,7 @@ class HybridScorer(Scorer):
 		"""
 		usable = []
 		for scorer, weight in self.scorers:
-			scores = scorer.relevance(query, candidates)
+			scores = scorer.relevance(query, candidates, vector)
 			if scores is not None:
 				usable.append((scores, weight))
 

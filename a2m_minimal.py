@@ -198,6 +198,12 @@ def remember(records=None, **ignored) -> dict:
 		if entry.get("tier") is not None:
 			raise A2MError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'tiers' capability")
 
+		if entry.get("key") is not None:
+			raise A2MError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'keys' capability")
+
+		if entry.get("embedding") is not None:
+			raise A2MError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'embeddings' capability")
+
 		# spec §3.2 -- a client-supplied id makes the write idempotent.
 		id = entry.get("id")
 		if id is not None and id in RECORDS:
@@ -219,7 +225,8 @@ def remember(records=None, **ignored) -> dict:
 	return {"ids": ids}
 
 
-def recall(query=None, limit=8, where=None, min_score=0.0, tier=None, **ignored) -> dict:
+def recall(query=None, limit=8, where=None, min_score=0.0, tier=None,
+           embedding=None, key_prefix=None, **ignored) -> dict:
 	"""Handle 'memory/recall'.
 
 	Args:
@@ -239,6 +246,10 @@ def recall(query=None, limit=8, where=None, min_score=0.0, tier=None, **ignored)
 	"""
 	if tier is not None:
 		raise A2MError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'tiers' capability")
+	if embedding is not None:
+		raise A2MError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'embeddings' capability")
+	if key_prefix is not None:
+		raise A2MError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'keys' capability")
 
 	candidates = [r for r in RECORDS.values() if matches(r, where)]
 	wanted     = terms(query) if query else set()
@@ -356,6 +367,7 @@ HANDLERS = {
 	"memory/reinforce"   : unsupported("salience"),
 	"memory/session/list": unsupported("sessions"),
 	"memory/session/close": unsupported("sessions"),
+	"memory/fetch"       : unsupported("keys"),
 }
 
 

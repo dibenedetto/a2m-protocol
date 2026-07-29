@@ -273,3 +273,58 @@ that hold text but yield no terms, and reports it as `unindexed`.
 work was developed in an AGPL-3.0 repository; carrying that licence here would
 have obliged anyone running a hosted memory server to publish their source, which
 is the principal deployment shape for this protocol.
+
+---
+
+## 017 — Addressable keys, and no separate namespace
+
+**Decision.** A caller-set `key` addresses a record; writing to an occupied key
+replaces it. Hierarchy comes from slash-delimited keys and `key_prefix`, not
+from a namespace field.
+
+**Why keys.** `id` identifies a *write*. Nothing in 0.1 identified a *fact*, so
+a corrected fact could only be appended alongside the stale one — and ranking
+(013) has no way to prefer the newer. `implementing-a2m.md` §4 described exactly
+this as unsolved and offered two mediocre answers: delete-then-write, or a
+`superseded_by` marker filtered at recall. Upsert beats both — one operation, and
+no window in which the fact is missing or doubled.
+
+**Why not namespaces.** The pre-0.1 draft addressed records as
+`{app}/{workflow}/{session}/{agent}`. But a slash-delimited key *is* a hierarchy
+and `key_prefix` *is* the recursive scope read. A namespace field would add a
+second addressing dimension that must be kept consistent with the first, for no
+expressive power keys do not already have. `owner` and `session` stay separate
+because they are not addressing: one is a scope boundary, the other a lifecycle.
+
+**Cost, accepted.** Key uniqueness is per `owner`, so "unique" depends on who is
+asking. That is deliberate — two agents should each be able to hold their own
+`user/city`.
+
+---
+
+## 018 — Caller-owned embeddings
+
+**Decision.** A vector supplied by the caller is stored **verbatim**. The server
+never generates one for a record that already carries one, and never replaces one
+it was given. A mismatched width is refused with `-32008`.
+
+**Why.** This is the rule the pre-0.1 draft got right and that 0.1 initially
+lost. A2M exists so agents from different frameworks can share memory, and
+vectors from different models are not comparable. A server that re-embeds
+whatever it is handed quietly moves every record into its own model's space —
+precisely the interoperability failure the protocol is meant to remove.
+
+Refusing a mismatched width rather than accepting it follows from 005: cosine
+between a 768- and a 1024-dimensional vector is not a lower-quality answer, it is
+not an answer, and a store mixing them ranks nonsense confidently.
+
+**Consequence worth having.** A store needs no embedding model at all to serve
+vector search: `EmbeddingScorer(None)` ranks entirely on what callers brought.
+The smallest useful A2M server just got smaller.
+
+**What the implementation taught.** The first version persisted vectors only in
+the tier that had a vector index, so a caller-supplied embedding on a
+working-tier record was silently dropped — "stored verbatim" quietly untrue for
+three tiers out of four. Every table now carries the column, and a record's own
+vector is searchable wherever it lives. The store still never *generates* one for
+working memory; it just no longer discards what it was handed.

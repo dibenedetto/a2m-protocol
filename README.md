@@ -81,6 +81,8 @@ and layers the rest into **capabilities** a server declares and a client checks.
 | `salience` | `reinforce` | no |
 | `scopes` | *(adds `owner`)* | no |
 | `sessions` | `session/list` `session/close` | no |
+| `keys` | `fetch` *(adds `key`: addressable, upsert)* | no |
+| `embeddings` | *(adds `embedding`: caller-owned, verbatim)* | no |
 
 A call into an undeclared capability returns `-32003 CAPABILITY_NOT_SUPPORTED` —
 **not** `-32601`, which a client cannot distinguish from a typo.
@@ -171,10 +173,10 @@ suite passes against all of them:
 
 | | storage | declares | conformance |
 |---|---|---|---|
-| [a2m.py](a2m.py) | a dict in memory | everything | 51/51 |
-| [a2m_minimal.py](a2m_minimal.py) | a dict, stdlib only | `core` only | 32/32 |
-| [a2m_store.py](a2m_store.py) | SQLite, one store per tier | everything | 51/51 |
-| [a2m_router.py](a2m_router.py) | four A2M servers | everything | 51/51 |
+| [a2m.py](a2m.py) | a dict in memory | everything | 71/71 |
+| [a2m_minimal.py](a2m_minimal.py) | a dict, stdlib only | `core` only | 33/33 |
+| [a2m_store.py](a2m_store.py) | SQLite, one store per tier | everything | 71/71 |
+| [a2m_router.py](a2m_router.py) | four A2M servers | everything | 71/71 |
 
 [a2m_minimal.py](a2m_minimal.py) imports **nothing from this repository**. It
 exists to answer a question the reference implementation cannot: *is the
@@ -203,7 +205,7 @@ than one spreading across `0..1` — spec §5.3.
 ## Running it
 
 ```
-python test_a2m.py                          # 171 checks, offline
+python test_a2m.py                          # 200 checks, offline
 python demo_a2m_stack.py                    # the whole stack, on disk
 python demo_a2m_stack.py --router           # same, federated across processes
 python a2m_store.py memory.db               # a persistent server on stdio
@@ -227,9 +229,9 @@ is **not gone** — it remains in this repository's history at commit
 |---|---|---|
 | wire format | REST over HTTP | JSON-RPC 2.0 — in-process, stdio, HTTP |
 | memory kinds | working, episodic, semantic, procedural, **external** | the first four |
-| addressing | hierarchical namespaces, recursive reads | `owner` + `session` |
-| identity | caller-set `key`, upsert by key | server-assigned opaque `id` |
-| embeddings | **caller-owned**, stored verbatim | server-side, pluggable scorer |
+| addressing | hierarchical namespaces, recursive reads | `key_prefix`, plus `owner` and `session` |
+| identity | caller-set `key`, upsert by key | **both** — opaque `id` *and* addressable `key` |
+| embeddings | **caller-owned**, stored verbatim | **both** — caller-owned, or server-side |
 | events | `WS /subscribe` | `events` capability, JSON-RPC notifications |
 | conformance | — | executable suite, four passing implementations |
 
@@ -237,23 +239,33 @@ The four memory kinds survived unchanged, having been arrived at twice
 independently — which is the strongest evidence in this repository that they are
 the right four.
 
-Four ideas from the draft are **deliberately still open** rather than rejected,
-and are the leading candidates for 0.2:
+Two of the draft's ideas are now **in** 0.1, and both improve on what they
+replaced:
+
+- **Addressable keys** (`keys`). `id` identifies a write; `key` addresses a
+  *fact*. Writing to an occupied key **replaces** what is there, keeping the id
+  and advancing `revision`. That is what makes a memory correctable rather than
+  merely appendable — a superseded fact that is only *outnumbered* by its
+  successor is still there to be recalled, with the same confidence as the truth.
+  Slash-delimited keys plus `key_prefix` give the hierarchy and the recursive
+  scope reads the draft wanted from namespaces, without a second addressing
+  dimension to keep consistent with the first.
+
+- **Caller-owned embeddings** (`embeddings`). A vector supplied by the caller is
+  stored **verbatim** — never regenerated, never replaced. Two frameworks
+  embedding with different models can share a store only if neither has its
+  vectors silently rewritten into the other's space. A store with no model at all
+  still answers vector searches. Mismatched widths are refused with `-32008`
+  rather than compared: cosine between vectors of different lengths is not a
+  worse answer, it is not an answer.
+
+One idea remains open:
 
 - **`external` records** — a record that points at a file, URL or blob rather
-  than holding text. 0.1 has no way to express one.
-- **Caller-owned embeddings.** The draft's rule — *the server stores and indexes
-  vectors verbatim and never generates or replaces them* — keeps the protocol
-  model-agnostic, which matters precisely for the cross-framework case A2M
-  exists to serve. 0.1 embeds server-side.
-- **Addressable keys and upsert.** A caller-set `key` such as `user/city` makes a
-  record *updatable by meaning*. That is a better answer to superseded facts than
-  either option [implementing-a2m.md §4](spec/implementing-a2m.md) currently
-  offers: `"the user lives in Bologna"` becomes wrong when they move, and an
-  upsert on `user/city` fixes it without a delete-then-write race.
-- **Hierarchical namespaces.** `owner` and `session` cover two levels of what the
-  draft's `{app}/{workflow}/{session}/{agent}` covered in four, and nothing in
-  0.1 does recursive scope reads.
+  than holding text. 0.1 still has no way to express one.
+
+Hierarchical namespaces were **folded into keys** rather than added as a
+separate dimension; see [DECISIONS.md](DECISIONS.md) 017.
 
 ---
 

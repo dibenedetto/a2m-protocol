@@ -20,6 +20,8 @@
         "salience",
         "scopes",
         "sessions",
+        "embeddings",
+        "keys",
         "events"
       ]
     },
@@ -84,6 +86,25 @@
             "null"
           ],
           "description": "capability: sessions"
+        },
+        "key": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "capability: keys"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "capability: keys"
+        },
+        "embedding": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "description": "capability: embeddings. Returned only when requested."
         }
       }
     },
@@ -128,6 +149,17 @@
             "string",
             "null"
           ]
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "embedding": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 1
         }
       }
     },
@@ -283,6 +315,35 @@
               "minimum": 1
             }
           }
+        },
+        "embeddings": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "dimensions": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "metric": {
+              "type": "string",
+              "enum": [
+                "cosine",
+                "dot",
+                "l2"
+              ]
+            },
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
         }
       }
     },
@@ -344,6 +405,19 @@
         },
         "owner": {
           "type": "string"
+        },
+        "key_prefix": {
+          "type": "string"
+        },
+        "embeddings": {
+          "type": "boolean"
+        },
+        "embedding": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 1
         }
       }
     },
@@ -376,6 +450,12 @@
         },
         "where": {
           "$ref": "#/$defs/where"
+        },
+        "key_prefix": {
+          "type": "string"
+        },
+        "embeddings": {
+          "type": "boolean"
         }
       }
     },
@@ -405,6 +485,11 @@
           "required": [
             "where"
           ]
+        },
+        {
+          "required": [
+            "key_prefix"
+          ]
         }
       ],
       "properties": {
@@ -424,6 +509,9 @@
           "$ref": "#/$defs/where"
         },
         "owner": {
+          "type": "string"
+        },
+        "key_prefix": {
           "type": "string"
         }
       }
@@ -571,7 +659,8 @@
                 -32004,
                 -32005,
                 -32006,
-                -32007
+                -32007,
+                -32008
               ]
             }
           ]
@@ -728,6 +817,42 @@
           }
         }
       }
+    },
+    "fetchParams": {
+      "type": "object",
+      "required": [
+        "key"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner": {
+          "type": "string"
+        },
+        "embeddings": {
+          "type": "boolean"
+        }
+      }
+    },
+    "fetchResult": {
+      "type": "object",
+      "required": [
+        "record"
+      ],
+      "properties": {
+        "record": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/record"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
     }
   },
   "methods": {
@@ -820,6 +945,15 @@
         "$ref": "#/$defs/sessionCloseResult"
       },
       "capability": "sessions"
+    },
+    "memory/fetch": {
+      "params": {
+        "$ref": "#/$defs/fetchParams"
+      },
+      "result": {
+        "$ref": "#/$defs/fetchResult"
+      },
+      "capability": "keys"
     }
   }
 }

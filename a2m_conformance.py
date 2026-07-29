@@ -140,7 +140,8 @@ def test_core(client: Client, report: Report, profile: dict[str, Any]) -> None:
 
 	declared = set(profile.get("capabilities", []))
 	report.check("declared capabilities are known",
-	             declared <= {"core", "tiers", "salience", "scopes", "sessions", "events"},
+	             declared <= {"core", "tiers", "salience", "scopes", "sessions",
+	                          "embeddings", "keys", "events"},
 	             declared)
 
 	expect_error(report, "an incompatible protocol is rejected", PROTOCOL_NOT_SUPPORTED,
@@ -383,6 +384,112 @@ def test_sessions(client: Client, report: Report, profile: dict[str, Any]) -> No
 		report.check("closing with no session is refused", exc.code == INVALID_PARAMS, exc.code)
 
 
+def test_keys(client: Client, report: Report, profile: dict[str, Any]) -> None:
+	"""Check the 'keys' capability: addressing, upsert, and prefix scope.
+
+	The check that matters is upsert. A key that appends instead of replacing is
+	worse than no key at all: the caller believes a fact was corrected while the
+	stale one is still there to be recalled.
+
+	Args:
+		client (Client): Connected to the server under test.
+		report (Report): Where to record results.
+		profile (dict): The server's describe result.
+	"""
+	print("\n  keys")
+
+	root = f"conformance/{uuid.uuid4().hex[:8]}"
+	key  = f"{root}/user/city"
+
+	client.call("memory/remember", {"records": [{"key": key, "content": "the user lives in bologna"}]})
+	first = client.call("memory/fetch", {"key": key}).get("record")
+	report.check("a record can be addressed by key", first and "bologna" in first.get("content", ""), first)
+	report.check("records report their key", first and first.get("key") == key, first)
+
+	client.call("memory/remember", {"records": [{"key": key, "content": "the user lives in milan"}]})
+	second = client.call("memory/fetch", {"key": key}).get("record")
+	report.check("writing to an occupied key replaces it",
+	             second and "milan" in second.get("content", ""), second)
+	report.check("the replaced record keeps its id", second and first and second["id"] == first["id"],
+	             (first or {}).get("id"), )
+	report.check("revision advances", isinstance(second.get("revision"), int) and second["revision"] >= 1, second)
+
+	held = client.call("memory/timeline", {"key_prefix": key}).get("records", [])
+	report.check("the stale value is gone, not merely outnumbered", len(held) == 1, held)
+
+	# Hierarchy: a prefix is the recursive scope read.
+	for leaf in ("goal", "budget"):
+		client.call("memory/remember", {"records": [{"key": f"{root}/wf-1/{leaf}", "content": f"about {leaf}"}]})
+	client.call("memory/remember", {"records": [{"key": f"{root}/wf-2/goal", "content": "other workflow"}]})
+
+	under = client.call("memory/timeline", {"key_prefix": f"{root}/wf-1/"}).get("records", [])
+	report.check("a key prefix scopes a read", len(under) == 2, [r.get("key") for r in under])
+
+	whole = client.call("memory/timeline", {"key_prefix": root}).get("records", [])
+	report.check("a shorter prefix scopes wider", len(whole) >= 4, len(whole))
+
+	report.check("fetching an unused key is not an error",
+	             client.call("memory/fetch", {"key": f"{root}/nothing/here"}).get("record") is None)
+
+	expect_error(report, "fetch without a key is refused", INVALID_PARAMS,
+	             lambda: client.call("memory/fetch", {}))
+
+	removed = client.call("memory/forget", {"key_prefix": root}).get("forgotten", 0)
+	report.check("a prefix can be forgotten wholesale", removed >= 4, removed)
+
+
+def test_embeddings(client: Client, report: Report, profile: dict[str, Any]) -> None:
+	"""Check the 'embeddings' capability: verbatim storage and vector search.
+
+	'Verbatim' is the whole contract. A server that re-embeds a caller's text and
+	replaces the vector silently moves every record into its own model's space,
+	which is exactly what makes two frameworks unable to share a store.
+
+	Args:
+		client (Client): Connected to the server under test.
+		report (Report): Where to record results.
+		profile (dict): The server's describe result.
+	"""
+	print("\n  embeddings")
+
+	contract = profile.get("embeddings") or {}
+	report.check("describe reports an embedding contract", isinstance(contract, dict), contract)
+	report.check("it names a metric", contract.get("metric") in ("cosine", "dot", "l2"), contract)
+
+	width  = contract.get("dimensions") or 8
+	marker = uuid.uuid4().hex[:8]
+	near   = [1.0] + [0.0] * (width - 1)
+	far    = [0.0, 1.0] + [0.0] * (width - 2) if width >= 2 else [1.0]
+
+	written = client.call("memory/remember", {"records": [
+		{"content": f"vector probe near {marker}", "embedding": near},
+		{"content": f"vector probe far {marker}",  "embedding": far},
+	]})
+	ids = written.get("ids", [])
+	report.check("records accept a caller-supplied vector", len(ids) == 2, written)
+
+	back = client.call("memory/recall", {"query": f"vector probe near {marker}",
+	                                     "limit": 1, "embeddings": True}).get("records", [])
+	if report.check("the stored vector can be read back", back and "embedding" in back[0], back):
+		stored = back[0]["embedding"]
+		report.check("it was stored verbatim, not regenerated",
+		             len(stored) == len(near) and all(abs(a - b) < 1e-5 for a, b in zip(stored, near)),
+		             stored[:4])
+
+	found = client.call("memory/recall", {"embedding": near, "limit": 1}).get("records", [])
+	report.check("a caller-supplied query vector searches", found, found)
+	report.check("and finds the nearer record", found and "near" in found[0].get("content", ""), found)
+
+	after = client.call("memory/describe", {}).get("embeddings") or {}
+	report.check("the store reports its dimensionality once fixed", after.get("dimensions") == len(near), after)
+
+	expect_error(report, "a mismatched vector width is refused", -32008,
+	             lambda: client.call("memory/remember", {"records": [
+	                 {"content": "wrong width", "embedding": [1.0] * (len(near) + 3)}]}))
+
+	client.call("memory/forget", {"ids": ids})
+
+
 def test_undeclared(client: Client, report: Report, profile: dict[str, Any]) -> None:
 	"""Check that undeclared capabilities answer -32003, not -32601.
 
@@ -404,6 +511,7 @@ def test_undeclared(client: Client, report: Report, profile: dict[str, Any]) -> 
 		("salience", "memory/reinforce"    , {"ids": []}),
 		("sessions", "memory/session/list" , {}),
 		("sessions", "memory/session/close", {"session": "x"}),
+		("keys"    , "memory/fetch"        , {"key": "x/y"}),
 	]
 
 	ran = False
@@ -439,7 +547,8 @@ def run(client: Client) -> Report:
 	test_undeclared(client, report, profile)
 
 	for capability, suite in (("tiers", test_tiers), ("salience", test_salience),
-	                          ("scopes", test_scopes), ("sessions", test_sessions)):
+	                          ("scopes", test_scopes), ("sessions", test_sessions),
+	                          ("keys", test_keys), ("embeddings", test_embeddings)):
 		if capability in declared:
 			suite(client, report, profile)
 		else:
