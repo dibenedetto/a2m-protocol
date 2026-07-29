@@ -120,10 +120,16 @@ def make_error_response(id: Any, code: int, message: str, data: Any = None) -> d
 class Dispatcher:
 	"""Maps method names to handlers and turns wire payloads into wire responses."""
 
-	def __init__(self) -> None:
+	def __init__(self, allow_batch: bool = True) -> None:
 		"""Create an empty dispatcher. Register handlers with 'register' or 'method'.
+
+		Args:
+			allow_batch (bool, optional): Whether to answer JSON-RPC batch arrays.
+				JSON-RPC 2.0 permits them; a protocol layered on top may not, and
+				A2M does not (spec 8). A refused batch answers -32600.
 		"""
-		self.handlers: dict[str, Callable] = {}
+		self.handlers    : dict[str, Callable] = {}
+		self.allow_batch = bool(allow_batch)
 
 
 	def register(self, method: str, handler: Callable) -> None:
@@ -173,6 +179,9 @@ class Dispatcher:
 			when every request was a notification and nothing needs answering.
 		"""
 		if isinstance(payload, list):
+			if not self.allow_batch:
+				return make_error_response(None, INVALID_REQUEST, "Batches are not accepted")
+
 			if not payload:
 				return make_error_response(None, INVALID_REQUEST, "Batch must not be empty")
 
@@ -261,6 +270,23 @@ class Transport:
 		raise NotImplementedError
 
 
+	def request_raw(self, payload: Any) -> Any:
+		"""Send exactly this payload and read exactly one reply.
+
+		'send' pairs a response to a request by id, so it cannot express a message
+		that has no id to pair on -- a batch, or a deliberately malformed request.
+		A conformance suite has to send those anyway, since refusing them correctly
+		is part of what it is checking.
+
+		Args:
+			payload (Any): Anything JSON-serialisable, valid or not.
+
+		Returns:
+			Any: The parsed reply, or None if the peer sent nothing.
+		"""
+		raise NotImplementedError
+
+
 	def close(self) -> None:
 		"""Release whatever the transport holds. Safe to call more than once.
 		"""
@@ -292,6 +318,18 @@ class LocalTransport(Transport):
 		request  = json.loads(json.dumps(payload))
 		response = self.dispatcher.handle(request)
 		return json.loads(json.dumps(response)) if response is not None else None
+
+
+	def request_raw(self, payload: Any) -> Any:
+		"""Dispatch anything at all and return whatever comes back.
+
+		Args:
+			payload (Any): Anything JSON-serialisable, valid or not.
+
+		Returns:
+			Any: The parsed reply, or None if the dispatcher answered nothing.
+		"""
+		return self.send(payload)
 
 
 class StdioTransport(Transport):
@@ -354,6 +392,52 @@ class StdioTransport(Transport):
 				return None
 
 			return self._read_until(payload["id"])
+
+
+	def request_raw(self, payload: Any) -> Any:
+		"""Write anything at all and read back the next message the peer sends.
+
+		Args:
+			payload (Any): Anything JSON-serialisable, valid or not.
+
+		Returns:
+			Any: The next parsed message.
+
+		Raises:
+			JsonRpcError: -32603 if the child has exited or closes the stream.
+		"""
+		with self._lock:
+			if self.process.poll() is not None:
+				raise JsonRpcError(INTERNAL_ERROR, f"Peer '{self.command[0]}' has exited")
+
+			self.process.stdin.write(json.dumps(payload) + "\n")
+			self.process.stdin.flush()
+
+			return self._read_message()
+
+
+	def _read_message(self) -> Any:
+		"""Read lines until one parses as JSON, and return it.
+
+		Returns:
+			Any: The parsed message.
+
+		Raises:
+			JsonRpcError: -32603 if the stream closes first.
+		"""
+		while True:
+			line = self.process.stdout.readline()
+			if not line:
+				raise JsonRpcError(INTERNAL_ERROR, f"Peer '{self.command[0]}' closed the stream")
+
+			line = line.strip()
+			if not line:
+				continue
+
+			try:
+				return json.loads(line)
+			except json.JSONDecodeError:
+				continue
 
 
 	def _read_until(self, id: Any) -> dict[str, Any]:
@@ -472,20 +556,132 @@ class HttpTransport(Transport):
 			raise JsonRpcError(INTERNAL_ERROR, f"Cannot reach {self.url}", str(exc.reason))
 
 
-def serve_http(dispatcher: Dispatcher, host: str = "127.0.0.1", port: int = 8778, path: str = "/") -> http.server.HTTPServer:
+	def request_raw(self, payload: Any) -> Any:
+		"""POST anything at all and parse whatever body comes back.
+
+		Unlike 'send', an HTTP error status is not itself the failure: a binding
+		that refuses a request carries its reason in a JSON-RPC error object in the
+		body, and that object is the answer being asked for here.
+
+		Args:
+			payload (Any): Anything JSON-serialisable, valid or not.
+
+		Returns:
+			Any: The parsed body, or None if the server sent none.
+
+		Raises:
+			JsonRpcError: -32603 if the endpoint cannot be reached, or answered a
+				failure with no JSON body to explain it.
+		"""
+		body    = json.dumps(payload).encode("utf-8")
+		headers = dict(self.headers)
+		headers.setdefault("Content-Type", "application/json")
+
+		request = urllib.request.Request(self.url, data=body, headers=headers, method="POST")
+
+		try:
+			with urllib.request.urlopen(request, timeout=self.timeout) as response:
+				raw = response.read().decode("utf-8").strip()
+				return json.loads(raw) if raw else None
+
+		except urllib.error.HTTPError as exc:
+			raw = exc.read().decode("utf-8", "replace").strip()
+			try:
+				return json.loads(raw)
+			except json.JSONDecodeError:
+				raise JsonRpcError(INTERNAL_ERROR, f"HTTP {exc.code} from {self.url}", raw[:500])
+		except urllib.error.URLError as exc:
+			raise JsonRpcError(INTERNAL_ERROR, f"Cannot reach {self.url}", str(exc.reason))
+
+
+def serve_http(
+	dispatcher      : Dispatcher,
+	host            : str            = "127.0.0.1",
+	port            : int            = 8778,
+	path            : str            = "/",
+	allowed_origins : list[str]      = None,
+	on_headers      : Callable       = None,
+	well_known      : dict[str, Any] = None,
+) -> http.server.HTTPServer:
 	"""Server side of HttpTransport. Returns the server without starting it, so a
-	caller can decide between `serve_forever()` and a background thread."""
+	caller can decide between `serve_forever()` and a background thread.
+
+	Args:
+		dispatcher (Dispatcher): What answers the requests.
+		host (str, optional): Bind address. Loopback by default, because a server
+			reachable from the network is a decision worth taking deliberately.
+		port (int, optional): Bind port.
+		path (str, optional): The single endpoint path, POST only.
+		allowed_origins (list[str], optional): Origins permitted to call this
+			endpoint. The default refuses any request carrying an 'Origin' header
+			at all, which is what stops a page the user happens to be visiting from
+			driving a server bound to their own loopback interface. Pass ["*"] to
+			allow every origin, or a list to allow those exactly.
+		on_headers (Callable, optional): Called with the request headers before the
+			body is read. Return None to accept, or (status, error object) to
+			refuse. This is the seam where a protocol layered on JSON-RPC adds its
+			own header rules without this module having to know them.
+		well_known (dict, optional): Documents to serve on GET, keyed by exact
+			path, e.g. {"/.well-known/a2m-server.json": profile}.
+	"""
+	origins   = list(allowed_origins) if allowed_origins else []
+	documents = dict(well_known) if well_known else {}
 
 	class Handler(http.server.BaseHTTPRequestHandler):
 
 		"""Minimal JSON-RPC-over-HTTP handler for one endpoint.
 		"""
+		def _origin_allowed(self) -> bool:
+			"""Whether this request's Origin, if it has one, may call this endpoint.
+
+			A request with no Origin is not from a browser and is allowed; that is
+			the ordinary case for an agent, a CLI or an SDK.
+
+			Returns:
+				bool: True when the request may proceed.
+			"""
+			origin = self.headers.get("Origin", None)
+			if origin is None:
+				return True
+
+			return "*" in origins or origin in origins
+
+
+		def do_GET(self) -> None:
+			"""Serve a well-known document. The RPC endpoint itself is POST-only.
+			"""
+			if not self._origin_allowed():
+				self.send_error(403, "Origin not allowed")
+				return
+
+			if self.path in documents:
+				self._reply(200, documents[self.path])
+				return
+
+			if self.path.rstrip("/") == path.rstrip("/"):
+				self.send_error(405, "This endpoint accepts POST")
+				return
+
+			self.send_error(404, "No such endpoint")
+
+
 		def do_POST(self) -> None:
 			"""Handle one request: 200 with a response, or 202 with nothing for a notification.
 			"""
+			if not self._origin_allowed():
+				self.send_error(403, "Origin not allowed")
+				return
+
 			if self.path.rstrip("/") != path.rstrip("/"):
 				self.send_error(404, "No such endpoint")
 				return
+
+			if on_headers is not None:
+				refusal = on_headers(self.headers)
+				if refusal is not None:
+					status, error = refusal
+					self._reply(status, error)
+					return
 
 			length = int(self.headers.get("Content-Length", 0) or 0)
 			raw    = self.rfile.read(length).decode("utf-8") if length else ""

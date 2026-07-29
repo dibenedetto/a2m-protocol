@@ -40,7 +40,7 @@ import uuid
 from   typing    import Any, Callable
 
 
-from   a2m       import A2M_VERSION, MemoryServer, serve_http, serve_stdio
+from   a2m       import A2M_VERSION, MemoryServer, serve_a2m_http, serve_stdio
 from   memory    import KINDS, MemoryRecord, MemoryTier, default_tiers, recency
 from   retrieval import LexicalScorer, cosine
 
@@ -151,6 +151,41 @@ class TierStore:
 			int: Visible record count in this tier.
 		"""
 		raise NotImplementedError
+
+
+	def index(self, record: MemoryRecord, embedding: list[float] = None) -> None:
+		"""Put a record's vector into whatever ANN index this tier keeps.
+
+		The default does nothing, which is the honest answer for a tier that is
+		replayed rather than searched. Keeping this on the store rather than in the
+		stack is what lets a different engine bring a different index without the
+		tier logic above it knowing.
+
+		Args:
+			record (MemoryRecord): The record just written.
+			embedding (list[float], optional): Its vector, if it has one.
+		"""
+		pass
+
+
+	def knn(self, embedding: list[float], owner: str, limit: int) -> dict[str, float] | None:
+		"""Rank this tier against a vector, using an index if there is one.
+
+		Returns:
+			dict | None: id -> similarity, or None when this tier has no vector
+			index. None means "rank these some other way", not "nothing matched" --
+			the same abstain/empty distinction the Scorer seam draws (spec §5.1).
+		"""
+		return None
+
+
+	def vectors(self, owner: str = None) -> dict[str, list[float]]:
+		"""Every stored vector in this tier, for ranking without an index.
+
+		Returns:
+			dict: id -> vector. Empty when this tier stores none.
+		"""
+		return {}
 
 
 	def touch(self, ids: list[str], now: float) -> None:
@@ -382,6 +417,21 @@ class DurableStore(TierStore):
 
 	TABLE = "durable"
 
+	def __init__(self, db: sqlite3.Connection, tier: MemoryTier, vec: bool = False) -> None:
+		"""Bind this store to a connection, its tier, and whether sqlite-vec loaded.
+
+		Args:
+			db (sqlite3.Connection): The shared connection.
+			tier (MemoryTier): The tier this store serves.
+			vec (bool, optional): Whether the sqlite-vec extension is available. When
+				it is not, this store still stores vectors -- it just ranks them in
+				Python instead of in an index.
+		"""
+		super().__init__(db, tier)
+		self.vec     = vec
+		self.indexed = False
+
+
 	def create(self) -> None:
 		"""Create the shared episodic/semantic table and its indexes.
 		"""
@@ -432,6 +482,33 @@ class DurableStore(TierStore):
 			 record.salience, record.created_at, record.accessed_at,
 			 record.access_count, record.tier,
 			 int(record.created_at * 1_000_000)),
+		)
+
+		self.index(record, embedding or record.embedding)
+
+
+	def index(self, record: MemoryRecord, embedding: list[float] = None) -> None:
+		"""Add a vector to the vec0 index, creating the index on first use.
+
+		Lazily, because the index's width is not known until a vector arrives -- and
+		nothing forces one to. A store that never sees an embedding never creates an
+		index, which is what makes `embed=None` a working configuration rather than
+		a degraded one.
+
+		Args:
+			record (MemoryRecord): The record just written.
+			embedding (list[float], optional): Its vector.
+		"""
+		if not self.vec or not embedding:
+			return
+
+		if not self.indexed:
+			self.create_index(len(embedding))
+			self.indexed = True
+
+		self.db.execute(
+			"INSERT INTO durable_vec(owner, tier, id, embedding) VALUES (?,?,?,?)",
+			(record.owner or "", self.name, record.id, pack(embedding)),
 		)
 
 
@@ -515,7 +592,7 @@ class DurableStore(TierStore):
 		return cursor.rowcount
 
 
-	def knn(self, embedding: list[float], owner: str, limit: int) -> dict[str, float]:
+	def knn(self, embedding: list[float], owner: str, limit: int) -> dict[str, float] | None:
 		"""Nearest neighbours, filtered *during* the search rather than after it.
 
 		'owner' is a vec0 partition key and 'tier' an auxiliary column, so a scoped
@@ -528,9 +605,14 @@ class DurableStore(TierStore):
 			limit (int): How many neighbours to ask for.
 
 		Returns:
-			dict[str, float]: Record id to cosine similarity. Empty when the index does
-			not exist yet, so a store with no embeddings degrades rather than failing.
+			dict | None: Record id to cosine similarity, or None when there is no
+			index to ask -- which tells the caller to rank another way rather than
+			that nothing matched. An empty dict means the index was consulted and had
+			nothing, and the two must not be confused (spec §5.1).
 		"""
+		if not self.vec:
+			return None
+
 		clauses = ["embedding MATCH ?", "k = ?", "tier = ?"]
 		params  = [pack(embedding), max(limit, 1), self.name]
 
@@ -726,46 +808,47 @@ class ProceduralStore(TierStore):
 		                       [amount, *ids]).rowcount
 
 
-class SqliteMemoryStack:
-	"""A durable memory stack, presenting the interface MemoryServer expects.
+class TieredMemoryStack:
+	"""The tier logic, with no opinion about what stores the rows.
 
-	Nothing in a2m.py knows this class exists. The server was written against a
-	dict-backed stack, and it drives this one unchanged — which is the argument
-	for having had a protocol boundary in the first place."""
+	Everything A2M's tier model actually *is* lives here: spilling under pressure,
+	promotion by reinforcement, session lifecycle, the blend of relevance with
+	recency and salience. None of it touches SQL. It drives `TierStore` instances
+	and asks them to store, read, delete and rank.
+
+	That is the seam this file exists to demonstrate, and the proof it is real is
+	[a2m_postgres.py](a2m_postgres.py): a completely different engine reuses this
+	class unchanged and implements only the stores beneath it.
+
+	Nothing in a2m.py knows this class exists either. The server was written
+	against a dict-backed stack and drives this one unmodified — which is the
+	argument for having had a protocol boundary in the first place."""
+
+	# What describe reports about this engine. Subclasses say what actually ranked
+	# and what actually stored, which is not always what was configured -- an
+	# extension may not have loaded.
+	SCORER  = "cosine+lexical"
+	BACKEND = "memory"
 
 	def __init__(
 		self,
-		path           : str               = "memory.db",
 		tiers          : list[MemoryTier]  = None,
 		embed          : Callable          = None,
 		consolidate_fn : Callable          = None,
 		weights        : dict[str, float]  = None,
 	) -> None:
-		"""Open, and create anything missing.
+		"""Set up the tier policy. Subclasses open the storage and build the stores.
 
 		Args:
-			path (str, optional): The database file. Created if absent, along with a
-				sibling directory for procedural files.
 			tiers (list[MemoryTier], optional): The layers. Defaults to the four
 				canonical ones. Pass a single tier to serve one tier of a federation.
 			embed (Callable, optional): A batched embedder. Without one, ranking is
 				lexical only -- which is a degraded ranking, not a broken store.
 			consolidate_fn (Callable, optional): Decides what spilling means.
 			weights (dict, optional): How relevance, recency and salience combine.
-
-		Raises:
-			ValueError: If a tier spills into a tier that does not exist.
-
-		Example:
-			stack = SqliteMemoryStack("memory.db", embed=ollama_embedder())
-			try:
-				MemoryServer(stack)
-			finally:
-				stack.close()
 		"""
 		tiers = tiers or default_tiers()
 
-		self.path           = pathlib.Path(path)
 		self.tiers          = {t.name: t for t in tiers}
 		self.order          = [t.name for t in tiers]
 		self.embed          = embed
@@ -780,50 +863,20 @@ class SqliteMemoryStack:
 		self._lock          = threading.RLock()
 		self._consolidating = threading.Lock()
 
-		self.db = sqlite3.connect(self.path, check_same_thread=False)
-		self.db.row_factory = sqlite3.Row
-		self.db.execute("PRAGMA journal_mode=WAL")
-		self.db.execute("PRAGMA synchronous=NORMAL")
-
-		self.vec = False
-		if HAVE_VEC:
-			try:
-				self.db.enable_load_extension(True)
-				sqlite_vec.load(self.db)
-				self.db.enable_load_extension(False)
-				self.vec = True
-			except Exception:
-				self.vec = False
-
 		self.stores: dict[str, TierStore] = {}
-		for tier in tiers:
-			if tier.kind == "working":
-				store = WorkingStore(self.db, tier)
-			elif tier.kind == "procedural":
-				store = ProceduralStore(self.db, tier, self.root)
-			else:
-				store = DurableStore(self.db, tier)
 
-			store.create()
-			self.stores[tier.name] = store
 
-		self.db.commit()
+	def _check_spills(self) -> None:
+		"""Refuse a tier configuration that spills into nowhere.
 
+		Raises:
+			ValueError: If a tier spills into a tier that does not exist.
+		"""
 		for name in self.order:
 			if tier_spill := self.tiers[name].spill_to:
 				if tier_spill not in self.tiers:
 					raise ValueError(f"Tier '{name}' spills into unknown tier '{tier_spill}'")
 
-
-	@property
-	def root(self) -> pathlib.Path:
-		"""The directory holding procedural files, beside the database.
-
-		Returns:
-			Path: '<name>.procedural' next to the database file, so it can be put
-			under version control on its own.
-		"""
-		return self.path.parent / f"{self.path.stem}.procedural"
 
 
 	@property
@@ -887,11 +940,6 @@ class SqliteMemoryStack:
 
 		if vectors and self.dimensions is None:
 			self.dimensions = len(vectors[0])
-			if self.vec:
-				for store in self.stores.values():
-					if isinstance(store, DurableStore):
-						store.create_index(self.dimensions)
-						break
 
 		return vectors
 
@@ -993,13 +1041,8 @@ class SqliteMemoryStack:
 				vectors   = self._embed([content])
 				embedding = vectors[0] if vectors else None
 
+			# The store indexes its own vector, if it keeps an index at all.
 			store.add(record, embedding)
-
-			if isinstance(store, DurableStore) and embedding and self.vec:
-				self.db.execute(
-					"INSERT INTO durable_vec(owner, tier, id, embedding) VALUES (?,?,?,?)",
-					(record.owner or "", name, record.id, pack(embedding)),
-				)
 
 			self.db.commit()
 			return record
@@ -1137,17 +1180,23 @@ class SqliteMemoryStack:
 				         if self._matches(r, where) and self._under(r, key_prefix)]
 				candidates.extend(rows)
 
-				if vector is None or not isinstance(store, DurableStore):
+				if vector is None:
 					continue
 
-				if self.vec:
-					relevance.update(store.knn(vector, agent, max(limit or 8, 8) * 4))
-				else:
-					# No extension: cosine in Python over the filtered survivors.
-					known = store.vectors(agent)
-					for record in rows:
-						if record.id in known:
-							relevance[record.id] = max(0.0, cosine(vector, known[record.id]))
+				# The tier answers with its index if it has one, and abstains with
+				# None if it does not. Abstaining is not "nothing matched": it means
+				# rank these another way, so the fallback is cosine in Python over the
+				# survivors this tier already filtered.
+				ranked = store.knn(vector, agent, max(limit or 8, 8) * 4)
+
+				if ranked is not None:
+					relevance.update(ranked)
+					continue
+
+				known = store.vectors(agent)
+				for record in rows:
+					if record.id in known:
+						relevance[record.id] = max(0.0, cosine(vector, known[record.id]))
 
 			if not candidates:
 				return []
@@ -1305,12 +1354,6 @@ class SqliteMemoryStack:
 			embedding = vectors[0] if vectors else None
 
 		store.add(record, embedding)
-
-		if isinstance(store, DurableStore) and embedding and self.vec:
-			self.db.execute(
-				"INSERT INTO durable_vec(owner, tier, id, embedding) VALUES (?,?,?,?)",
-				(record.owner or "", record.tier, record.id, pack(embedding)),
-			)
 
 
 	def consolidate(self, now: float = None) -> dict[str, Any]:
@@ -1529,8 +1572,8 @@ class SqliteMemoryStack:
 				"total"  : sum(s.count(agent) for s in self.stores.values()),
 				"weights": dict(self.weights),
 				"scorer" : {
-					"scorer"  : "sqlite-vec" if self.vec else "cosine+lexical",
-					"backend" : str(self.path),
+					"scorer"  : self.SCORER,
+					"backend" : self.BACKEND,
 					"vectors" : bool(self.embed),
 					"stores"  : {n: type(s).__name__ for n, s in self.stores.items()},
 				},
@@ -1635,6 +1678,106 @@ class SqliteMemoryStack:
 			self.db.close()
 
 
+class SqliteMemoryStack(TieredMemoryStack):
+	"""The tier logic above, stored in one SQLite file."""
+
+	def __init__(
+		self,
+		path           : str               = "memory.db",
+		tiers          : list[MemoryTier]  = None,
+		embed          : Callable          = None,
+		consolidate_fn : Callable          = None,
+		weights        : dict[str, float]  = None,
+	) -> None:
+		"""Open, and create anything missing.
+
+		Args:
+			path (str, optional): The database file. Created if absent, along with a
+				sibling directory for procedural files.
+			tiers (list[MemoryTier], optional): The layers. Defaults to the four
+				canonical ones. Pass a single tier to serve one tier of a federation.
+			embed (Callable, optional): A batched embedder. Without one, ranking is
+				lexical only -- which is a degraded ranking, not a broken store.
+			consolidate_fn (Callable, optional): Decides what spilling means.
+			weights (dict, optional): How relevance, recency and salience combine.
+
+		Raises:
+			ValueError: If a tier spills into a tier that does not exist.
+
+		Example:
+			stack = SqliteMemoryStack("memory.db", embed=ollama_embedder())
+			try:
+				MemoryServer(stack)
+			finally:
+				stack.close()
+		"""
+		super().__init__(tiers=tiers, embed=embed, consolidate_fn=consolidate_fn, weights=weights)
+
+		self.path = pathlib.Path(path)
+
+		self.db = sqlite3.connect(self.path, check_same_thread=False)
+		self.db.row_factory = sqlite3.Row
+		self.db.execute("PRAGMA journal_mode=WAL")
+		self.db.execute("PRAGMA synchronous=NORMAL")
+
+		self.vec = False
+		if HAVE_VEC:
+			try:
+				self.db.enable_load_extension(True)
+				sqlite_vec.load(self.db)
+				self.db.enable_load_extension(False)
+				self.vec = True
+			except Exception:
+				self.vec = False
+
+		for tier in self.tiers.values():
+			if tier.kind == "working":
+				store = WorkingStore(self.db, tier)
+			elif tier.kind == "procedural":
+				store = ProceduralStore(self.db, tier, self.root)
+			else:
+				store = DurableStore(self.db, tier, vec=self.vec)
+
+			store.create()
+			self.stores[tier.name] = store
+
+		self.db.commit()
+		self._check_spills()
+
+
+	@property
+	def SCORER(self) -> str:
+		"""What ranked this store, for describe.
+
+		Returns:
+			str: The index actually in use, which is not the same as the one that
+			was configured -- the extension may not have loaded.
+		"""
+		return "sqlite-vec" if self.vec else "cosine+lexical"
+
+
+	@property
+	def BACKEND(self) -> str:
+		"""Where the rows actually are, for describe.
+
+		Returns:
+			str: The database path.
+		"""
+		return str(self.path)
+
+
+	@property
+	def root(self) -> pathlib.Path:
+		"""The directory holding procedural files, beside the database.
+
+		Returns:
+			Path: '<name>.procedural' next to the database file, so it can be put
+			under version control on its own.
+		"""
+		return self.path.parent / f"{self.path.stem}.procedural"
+
+
+
 def open_stack(path: str = "memory.db", embed: Callable = None, **kwargs) -> SqliteMemoryStack:
 	"""Open a durable memory stack backed by a SQLite file.
 
@@ -1708,7 +1851,7 @@ def main() -> int:
 		index = argv.index("--http")
 		port  = int(argv[index + 1]) if len(argv) > index + 1 else 8778
 		print(f"A2M {A2M_VERSION} on http://127.0.0.1:{port}/ backed by {path}", file=sys.stderr)
-		serve_http(server.dispatcher, port=port).serve_forever()
+		serve_a2m_http(server, port=port).serve_forever()
 	else:
 		serve_stdio(server.dispatcher)
 

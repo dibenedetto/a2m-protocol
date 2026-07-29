@@ -404,3 +404,202 @@ skipped everything that makes them implementable:
 yet, which is precisely the argument for removing it now. A 0.2 client asking for
 `events` against a 0.1 server gets `-32003`, which is the correct answer and the
 mechanism working as designed (001, 002).
+
+---
+
+## 021 — The bindings follow MCP, not A2M's own taste
+
+**Decision.** Align §8 with what MCP and A2A already do: JSON-RPC 2.0 on every
+binding, no batches, no server-initiated requests, stdio framed exactly as MCP
+frames it, one POST endpoint over HTTP. Add `Origin` validation, an
+`A2M-Protocol-Version` header and a well-known profile.
+
+**Why conform rather than choose.** A2M is not going to win an argument about
+transport design, and winning it would not help: an agent runtime that already
+speaks MCP has pipe handling, framing, a JSON-RPC client and an HTTP endpoint
+already built. Every place A2M differs is a place that runtime needs a second
+code path, and the differences bought nothing — the interesting part of A2M is
+the memory model, not the envelope.
+
+Checked against the specifications rather than from memory (MCP current revision
+`2025-11-25`, draft `2026-07-28`; A2A `v1.0.0`). A2M's stdio binding already
+matched MCP's clause for clause, which is the strongest evidence that conforming
+costs nothing here.
+
+**Batching, and how the spec was already wrong.** §8.3 said the HTTP body could
+be "an array for a batch". `a2m_minimal.py` had never implemented it — it
+rejects any non-object with `-32600` — so the specification had a clause one of
+its four conformant implementations did not honour, and the conformance suite
+never noticed because it had no way to *send* a batch through the client
+abstraction. A batch has no `id` of its own for a response to bind to, and
+`memory/remember` already takes many records in one call, which is where
+batching actually pays. MCP removed batching in `2025-06-18` for the same
+reason. Now normative in the other direction, and checked.
+
+That gap is also why `Transport.request_raw` exists: a suite that can only send
+well-formed single requests cannot verify that malformed ones are refused.
+
+**Why `Origin` validation is a MUST and not a SHOULD.** A memory server's most
+interesting deployment is local, unauthenticated, and holding everything an
+agent has ever been told. §6's authentication rules explicitly do not apply
+there. Without `Origin` validation, any page the user happens to be browsing can
+POST to `127.0.0.1:8778` and read the lot. Binding loopback does not help — that
+is where the browser already is. This is the same family as 004 and 019: the
+dangerous default is the convenient one.
+
+**Why the version header is a SHOULD and its absence is not an error.** It
+exists so a gateway can route or reject without parsing a body. Making it
+mandatory would break every hand-written `curl` against a local server for no
+protocol benefit, since `memory/describe` is still where negotiation happens.
+Present-and-wrong is refused; absent is fine.
+
+**Where A2M deliberately still differs.** MCP's `2026-07-28` draft drops the
+`initialize` handshake in favour of per-request version metadata plus an
+optional `server/discover`. A2M keeps `memory/describe`-first (§2). Capability
+negotiation is load-bearing here in a way it is not for MCP — a client must know
+before it calls whether `keys`, `embeddings` or `tiers` exist — and one
+negotiation point is cheaper than repeating capabilities in the `_meta` of every
+request. `memory/describe` already *is* `server/discover`. Revisit if MCP's
+draft becomes current and the ecosystem follows it.
+
+**Well-known profile, borrowed from A2A.** A2A publishes an Agent Card at
+`/.well-known/agent-card.json`; A2M publishes its `describe` result at
+`/.well-known/a2m-server.json`. One handler, and a server becomes discoverable
+by a directory or an operator holding no A2M client at all. Advisory and
+possibly stale by construction — a client that needs the truth calls
+`memory/describe`.
+
+---
+
+## 022 — A second language, and no build step
+
+**Decision.** [a2m_minimal.ts](a2m_minimal.ts) ports the minimal server to
+TypeScript, run directly by `node --experimental-strip-types`. No `package.json`,
+no `tsconfig.json`, no dependencies, no compiled output.
+
+**Why a second language at all.** "Transport-agnostic" and "language-independent"
+were assertions. Five implementations in one language demonstrate that Python
+agrees with itself; the conformance suite already speaks only the protocol, so
+validating a non-Python server cost nothing but the server. It now passes the
+same unmodified suite, 34/34, exactly as `a2m_minimal.py` does.
+
+**Why no build step.** A TypeScript project with a compile stage would have made
+this the first thing in the repository that has to be *built* before it can be
+run, and the second that needs a package manager. Node strips the types and runs
+the file, which keeps the promise the Python side makes: clone it, run it.
+
+**What the port actually caught.** Two rules that a same-language port would have
+carried across for free, and that a real implementer will meet:
+
+- **Timestamps.** JavaScript's instinct is `Date.now()` — a millisecond epoch
+  integer, which is exactly the ambiguity 003 removed. `toISOString()` happens to
+  be the right shape, but nothing warns you when it is not.
+- **Id types.** JSON-RPC ids may be strings or numbers, and JavaScript coerces
+  between them without complaint. An id normalised on the way through is a
+  response a client waits for forever. Echoing it untouched is a rule the Python
+  implementation never had to think about.
+
+Neither is exotic. Both are the kind of thing a specification is *for*, and
+neither would have surfaced without leaving the reference language.
+
+**Consequence.** The most useful demonstration in the repository is now a pair:
+`a2m_client.py` against `a2m_minimal.ts` is a Python client and a TypeScript
+server sharing no code, neither written against the other.
+
+---
+
+## 023 — Adapters, and the silo they nearly rebuilt
+
+**Decision.** `adapters/langchain.py` and `adapters/agno.py`, each importing one
+framework, neither imported by anything else. `examples/cross_framework.py` runs
+both against one store.
+
+**Why they belong here after all.** The pre-0.1 draft shipped four adapters and a
+cross-framework example; the 0.1 reset dropped them, and the README went on
+claiming that frameworks cannot share memory without anything demonstrating that
+A2M fixes it. A protocol that only its own reference implementation speaks is not
+a protocol (001), and the same argument applies to the frameworks it is supposed
+to join. The stdlib-only property is preserved by isolation, not by absence:
+`adapters/__init__.py` imports no framework, so a checkout without either still
+runs every test, every conformance target and both demos.
+
+**The mapping is thin because the protocol did the work.** LangChain splits chat
+history from retrieval, which is exactly the `timeline`/`recall` split of 007 —
+so each side maps onto one method and neither emulates the other. Agno wants
+`upsert`, which is `keys` (017) doing precisely what it was added for: writing an
+occupied key replaces, so a corrected document does not sit beside the stale one.
+
+**What the adapters caught.** Two things, both real:
+
+- **A namespace scopes reads as well as writes.** `A2MVectorDb` originally
+  filtered every search by its own namespace, so an Agno knowledge base could
+  only ever find documents Agno had written. That is a private store with extra
+  steps — the exact failure A2M exists to remove, reintroduced one layer up.
+  `namespace=None` now means "write mine, search everything", and the
+  cross-framework example uses it.
+- **A conversation is not knowledge yet.** The first version of the example
+  asserted that Agno could find what LangChain had just written. It could not,
+  correctly: those turns were in working memory, which is replayed and never
+  searched (007). The example now asserts the *absence* first, closes the
+  session, and finds it afterwards — which demonstrates why the tiers exist
+  rather than working around them.
+
+The second one is the better argument for adapters existing at all. A rule that
+survives a conformance suite can still be a rule nobody understands until two
+real frameworks meet on top of it.
+
+---
+
+## 024 — A second engine, and the seam it proved was not real yet
+
+**Decision.** [a2m_postgres.py](a2m_postgres.py) serves the same tier model on
+PostgreSQL and pgvector, reusing `TieredMemoryStack` unchanged. To make that
+possible, `a2m_store.py` was split: `TieredMemoryStack` holds every tier decision
+and touches no SQL, `SqliteMemoryStack` holds the SQLite wiring.
+
+**Why a second engine.** `a2m_store.py`'s docstring claimed that "swapping
+DurableStore for Postgres means implementing that class, not rewriting the
+server". That was an assertion. One backend proves a store works; two prove the
+*seam* does, and the seam is what the file exists to demonstrate.
+
+**It was not true when it was written.** The stack reached past `TierStore` and
+wrote `INSERT INTO durable_vec` directly, in two places, guarded by
+`isinstance(store, DurableStore)` and a `self.vec` flag that only sqlite-vec
+could set. A different engine could not have been dropped underneath it, because
+the tier logic knew which index it was talking to. The fix moves indexing into
+the store that owns it, and gives `TierStore.knn` a third answer:
+
+- a dict — "I have an index, here is what it ranked",
+- `{}` — "I consulted it and nothing matched",
+- `None` — "I have no index; rank these another way".
+
+That is the same abstain/empty distinction as the `Scorer` seam in 013, and for
+the same reason: collapsing the last two makes a store with no vectors return
+either everything or nothing.
+
+**What the port cost.** Three `TierStore` subclasses and one `TieredMemoryStack`
+subclass. No tier logic, and nothing at all in `a2m.py`, which does not know
+either engine exists. 78/78 on stdio, 82/82 over HTTP.
+
+**What differed, and mattered.** Not the dialect — the semantics underneath it:
+
+- **`INSERT OR IGNORE` is `ON CONFLICT (id) DO NOTHING`.** This is not a
+  translation detail: it is what makes a client-supplied id idempotent (011), the
+  only retry-safety in the protocol. Written as a plain insert, a network retry
+  becomes a duplicate.
+- **pgvector's `<=>` is cosine distance, so similarity is `1 - d`;** sqlite-vec
+  reports L2 over normalised vectors and needs `1 - d²/2`. Both must land in
+  `0..1` or the blend with recency and salience silently changes meaning. Two
+  engines, two conversions, one range — which is exactly the argument in 005 for
+  `score` being ranking information and nothing more.
+- **A vector column's width is fixed at DDL time,** so the index is created
+  lazily on the first embedding, as on the SQLite side. A store configured
+  without an embedder never creates one, which keeps `embed=None` a working
+  configuration rather than a degraded one.
+
+**Where the engines legitimately disagree.** SQLite keeps procedural memory as
+files on disk, so a runbook can be reviewed and version-controlled like the code
+it describes. A server reachable over a network has no such disk to share, so the
+PostgreSQL store keeps the text in the row. The tier's *meaning* is identical —
+written deliberately, never spilled into (006) — and that is the part the
+protocol constrains. Storage is where implementations are supposed to differ.

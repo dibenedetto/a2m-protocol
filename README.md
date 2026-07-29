@@ -60,6 +60,12 @@ The transport changes; the client does not. Methods live under `memory/`, a
 namespace chosen so one endpoint can serve A2M alongside MCP's `tools/`,
 `resources/` and `prompts/`.
 
+The bindings are deliberately the ones MCP and A2A already use — JSON-RPC 2.0,
+newline-delimited over stdio, a single POST endpoint over HTTP, no batches, and
+no server-initiated requests. A2M adds only what a memory server specifically
+needs: `Origin` validation, an `A2M-Protocol-Version` header, and a profile at
+`/.well-known/a2m-server.json`. See spec [§8](spec/a2m-0.1.md) and DECISION 021.
+
 ---
 
 ## Why it is shaped this way
@@ -138,29 +144,51 @@ a vector database, is in [spec/implementing-a2m.md](spec/implementing-a2m.md).
 | [spec/schema/](spec/schema/) | JSON Schema for every request, response and record |
 | [a2m.py](a2m.py) | reference server and client, all capabilities |
 | [a2m_minimal.py](a2m_minimal.py) | independent `core`-only server, standard library only |
+| [a2m_minimal.ts](a2m_minimal.ts) | the same server in TypeScript, no dependencies, no build |
+| [a2m_client.py](a2m_client.py) | independent client and CLI, standard library only |
 | [a2m_conformance.py](a2m_conformance.py) | conformance suite for **any** A2M server |
-| [a2m_store.py](a2m_store.py) | persistent sample: one SQLite file, one store per tier |
-| [a2m_router.py](a2m_router.py) | federated sample: one process per tier, one router |
+| [a2m_store.py](a2m_store.py) | reference persistent store: one SQLite file, one store per tier |
+| [a2m_postgres.py](a2m_postgres.py) | the same tier logic on PostgreSQL and pgvector |
+| [a2m_router.py](a2m_router.py) | reference federation: one process per tier, one router |
 | [memory.py](memory.py) · [retrieval.py](retrieval.py) · [text.py](text.py) · [jsonrpc.py](jsonrpc.py) | the reference stack |
+| [adapters/](adapters/) | LangChain and Agno, talking to an A2M server unmodified |
+| [examples/cross_framework.py](examples/cross_framework.py) | both frameworks sharing one store, as a runnable script |
 | [test_a2m.py](test_a2m.py) | `python test_a2m.py` — no test runner, no network |
 | [bench_embeddings.py](bench_embeddings.py) | which embedding model backs recall, measured |
 | [DECISIONS.md](DECISIONS.md) | why the non-obvious choices are what they are |
 
 The protocol, the reference implementation and the conformance suite need
 **nothing but the standard library**. `sqlite-vec` and `ollama` are optional and
-used only by the sample store and the benchmark.
+used only by the reference store and the benchmark.
+
+### Reading order
+
+The files are not equally good places to start, and the two largest are the
+worst ones.
+
+1. **[spec/a2m-0.1.md](spec/a2m-0.1.md)** — everything else is downstream of it.
+2. **[a2m_minimal.py](a2m_minimal.py)** (467 lines) — a whole server, written
+   from the specification alone. If you are implementing A2M, copy this.
+3. **[a2m_client.py](a2m_client.py)** — the other side, under the same rule.
+   Between them they show both halves of a conversation with nothing shared.
+4. **[a2m_store.py](a2m_store.py)** and **[a2m_router.py](a2m_router.py)** —
+   1700 and 1000 lines. These are *reference implementations*, not samples: they
+   exist to prove the protocol survives a real store and a real federation, and
+   to be read a section at a time when you hit the problem they solve. Reading
+   either front to back to learn A2M is the wrong way round.
 
 ---
 
 ## Conformance
 
 [a2m_conformance.py](a2m_conformance.py) speaks only the protocol — it never
-imports the server under test, so a Rust or TypeScript implementation is tested
-exactly as a Python one is.
+imports the server under test, so an implementation in another language is
+tested exactly as a Python one is.
 
 ```
 python a2m_conformance.py --stdio python a2m.py
 python a2m_conformance.py --stdio python a2m_minimal.py
+python a2m_conformance.py --stdio node --experimental-strip-types a2m_minimal.ts
 python a2m_conformance.py --http  http://127.0.0.1:8778/
 ```
 
@@ -169,15 +197,20 @@ capability and then not honouring it *is* a failure — a client trusts
 `describe`, so a server lying there breaks clients in ways no defensive coding
 on their side can fix.
 
-Four implementations ship, sharing no storage code, and the same unmodified
-suite passes against all of them:
+Six implementations ship, and the same unmodified suite passes against all of
+them:
 
 | | storage | declares | conformance |
 |---|---|---|---|
-| [a2m.py](a2m.py) | a dict in memory | everything | 77/77 |
-| [a2m_minimal.py](a2m_minimal.py) | a dict, stdlib only | `core` only | 33/33 |
-| [a2m_store.py](a2m_store.py) | SQLite, one store per tier | everything | 77/77 |
-| [a2m_router.py](a2m_router.py) | four A2M servers | everything | 77/77 |
+| [a2m.py](a2m.py) | a dict in memory | everything | 78/78 |
+| [a2m_minimal.py](a2m_minimal.py) | a dict, stdlib only | `core` only | 34/34 |
+| [a2m_minimal.ts](a2m_minimal.ts) | a Map, **TypeScript** | `core` only | 34/34 |
+| [a2m_store.py](a2m_store.py) | SQLite + sqlite-vec | everything | 78/78 |
+| [a2m_postgres.py](a2m_postgres.py) | **PostgreSQL + pgvector** | everything | 78/78 |
+| [a2m_router.py](a2m_router.py) | four A2M servers | everything | 78/78 |
+
+Over HTTP the suite runs five further checks that stdio cannot reach — `Origin`,
+the version header, `405` on GET, the well-known profile — for **82/82**.
 
 [a2m_minimal.py](a2m_minimal.py) imports **nothing from this repository**. It
 exists to answer a question the reference implementation cannot: *is the
@@ -185,6 +218,19 @@ specification enough on its own?* An implementation sharing code with the
 reference proves only that the reference agrees with itself. Writing it found a
 real bug — `a2m.py` was rejecting unrecognised parameters, breaking the
 forward-compatibility rule that lets a newer client talk to an older server.
+
+[a2m_minimal.ts](a2m_minimal.ts) answers the next question: *is it enough in a
+language that is not the reference language?* It needs no dependencies and no
+build — `node --experimental-strip-types` runs the file as it is. The port is
+where a JSON-shaped protocol earns the description, and two rules did the work:
+timestamps stay RFC 3339 strings where JavaScript's instinct is an epoch integer
+(§3.3), and an `id` is echoed back with its type intact where JavaScript would
+happily turn `1` into `"1"` (§3.2).
+
+Which makes the useful demonstration a pair: [a2m_client.py](a2m_client.py)
+talking to [a2m_minimal.ts](a2m_minimal.ts) is a Python client and a TypeScript
+server that share not one line of code, and neither was written against the
+other.
 
 ---
 
@@ -206,11 +252,19 @@ than one spreading across `0..1` — spec §5.3.
 ## Running it
 
 ```
-python test_a2m.py                          # 212 checks, offline
+python test_a2m.py                          # 219 checks, offline
 python demo_a2m_stack.py                    # the whole stack, on disk
 python demo_a2m_stack.py --router           # same, federated across processes
 python a2m_store.py memory.db               # a persistent server on stdio
 python a2m_router.py memories/ --http 8778  # federated, over HTTP
+```
+
+Talking to any of them, with a client that shares no code with them:
+
+```
+python a2m_client.py --stdio python a2m_store.py memory.db -- remember "the deploy key rotates every ninety days"
+python a2m_client.py --stdio python a2m_store.py memory.db -- recall   "how often does the key change?"
+python a2m_client.py --http  http://127.0.0.1:8778/         -- describe
 ```
 
 ---

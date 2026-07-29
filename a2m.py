@@ -37,12 +37,19 @@ from   typing  import Any, Callable
 
 from   jsonrpc import (
 	Client, Dispatcher, INVALID_PARAMS, JsonRpcError,
-	HttpTransport, LocalTransport, StdioTransport, serve_http, serve_stdio,
+	HttpTransport, LocalTransport, StdioTransport, make_error_response,
+	serve_http, serve_stdio,
 )
 from   memory  import MemoryStack
 
 
 A2M_VERSION = "a2m/0.1"
+
+# The HTTP binding mirrors the protocol version into a header so that gateways can
+# route and reject without parsing a body, and publishes the describe profile at a
+# well-known path so a server can be found before it is called. See spec §8.3.
+A2M_VERSION_HEADER = "A2M-Protocol-Version"
+A2M_WELL_KNOWN     = "/.well-known/a2m-server.json"
 
 # The A2M error block, allocated from the -32000..-32099 range JSON-RPC reserves
 # for implementation-defined server errors. See spec §7.
@@ -117,7 +124,9 @@ class MemoryServer:
 		self.max_records_per_call = int(max_records_per_call)
 		self.dimensions           = dimensions
 		self.embedding_model      = embedding_model
-		self.dispatcher           = Dispatcher()
+		# A2M messages are single objects: a batch has no id to bind a response to,
+		# and nothing in the protocol needs one (spec §8).
+		self.dispatcher           = Dispatcher(allow_batch=False)
 
 		if "core" not in self.capabilities:
 			raise ValueError("An A2M server must implement the 'core' capability")
@@ -1001,7 +1010,69 @@ def connect_http(url: str, headers: dict[str, str] = None, agent: str = None, ti
 	Returns:
 		MemoryClient: Connected client.
 	"""
+	headers = dict(headers) if headers else {}
+	headers.setdefault(A2M_VERSION_HEADER, A2M_VERSION)
+
 	return MemoryClient(Client(HttpTransport(url, headers=headers, timeout=timeout)), agent=agent)
+
+
+def serve_a2m_http(
+	server,
+	host            : str       = "127.0.0.1",
+	port            : int       = 8778,
+	path            : str       = "/",
+	allowed_origins : list[str] = None,
+):
+	"""An HTTP server carrying A2M's binding rules, per spec §8.3.
+
+	Three things separate this from a bare JSON-RPC endpoint: Origin validation,
+	the protocol version header, and the well-known profile. All three exist so
+	that something in front of the server -- a browser, a gateway, a directory --
+	can act correctly without understanding A2M itself.
+
+	Args:
+		server: Anything exposing 'dispatcher' and 'describe'. MemoryServer and
+			MemoryRouter both do.
+		host (str, optional): Bind address. Loopback by default.
+		port (int, optional): Bind port.
+		path (str, optional): The RPC endpoint path.
+		allowed_origins (list[str], optional): Browser origins permitted to call
+			this server. The default admits none, which is what a local server
+			wants; see jsonrpc.serve_http.
+
+	Returns:
+		http.server.HTTPServer: Not yet started -- call serve_forever().
+
+	Example:
+		server = MemoryServer()
+		serve_a2m_http(server, port=8778).serve_forever()
+	"""
+	def check_version(headers: Any) -> tuple[int, dict[str, Any]] | None:
+		"""Refuse a request that declares a version this server does not speak.
+
+		Absent is not a mismatch: the header is a convenience for intermediaries,
+		and memory/describe remains the negotiation that matters.
+		"""
+		declared = headers.get(A2M_VERSION_HEADER, None)
+		if declared is None or declared == A2M_VERSION:
+			return None
+
+		return (400, make_error_response(
+			None,
+			PROTOCOL_NOT_SUPPORTED,
+			f"This server speaks {A2M_VERSION}, not {declared}",
+			{"supported": [A2M_VERSION]},
+		))
+
+	return serve_http(
+		server.dispatcher,
+		host            = host,
+		port            = port,
+		path            = path,
+		allowed_origins = allowed_origins,
+		on_headers      = check_version,
+		well_known      = {A2M_WELL_KNOWN: server.describe()},
+	)
 
 
 def serve(stack: MemoryStack = None, name: str = "agent-memory", capabilities: list[str] = None) -> None:
@@ -1024,7 +1095,7 @@ def serve_over_http(stack: MemoryStack = None, name: str = "agent-memory", host:
 		host (str, optional): Bind address.
 		port (int, optional): Bind port.
 	"""
-	server = serve_http(MemoryServer(stack=stack, name=name).dispatcher, host=host, port=port)
+	server = serve_a2m_http(MemoryServer(stack=stack, name=name), host=host, port=port)
 	print(f"A2M {A2M_VERSION} on http://{host}:{port}/", file=sys.stderr)
 	server.serve_forever()
 

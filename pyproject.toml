@@ -13,11 +13,18 @@ requires-python = ">=3.14"
 dependencies    = []
 
 [project.optional-dependencies]
-# Vector indexing for the persistent sample store. Without it, a2m_store.py
-# falls back to cosine in Python.
-vector = ["sqlite-vec>=0.1.9"]
-# Local embeddings, used by the sample store and by bench_embeddings.py.
-embed  = ["ollama"]
+# Vector indexing for the reference store. Without it, a2m_store.py falls back to
+# cosine in Python -- slower sooner, not a lesser mode of the protocol.
+vector    = ["sqlite-vec>=0.1.9"]
+# PostgreSQL and pgvector, for a store that outlives one machine.
+postgres  = ["psycopg[binary]>=3.1"]
+# Local embeddings, used by the reference store and by bench_embeddings.py.
+embed     = ["ollama"]
+# Framework adapters. Each module in adapters/ imports one of these and nothing
+# else imports them, so a checkout without them still runs every test, every
+# conformance target and both demos.
+langchain = ["langchain-core>=0.3"]
+agno      = ["agno>=2.0"]
 
 [project.urls]
 Homepage      = "https://a2m-protocol.org"

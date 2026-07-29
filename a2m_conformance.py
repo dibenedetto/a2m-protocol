@@ -21,6 +21,8 @@ Exit code is 0 when every applicable check passes.
 
 import json
 import sys
+import urllib.error
+import urllib.request
 import uuid
 
 
@@ -35,6 +37,7 @@ PROTOCOL = "a2m/0.1"
 UNKNOWN_TIER             = -32002
 CAPABILITY_NOT_SUPPORTED = -32003
 PROTOCOL_NOT_SUPPORTED   = -32007
+INVALID_REQUEST          = -32600
 INVALID_PARAMS           = -32602
 METHOD_NOT_FOUND         = -32601
 
@@ -571,6 +574,86 @@ def test_undeclared(client: Client, report: Report, profile: dict[str, Any]) -> 
 		report.skip("undeclared capability probes", "this server declares everything")
 
 
+def test_transport(client: Client, report: Report, profile: dict[str, Any]) -> None:
+	"""Check the binding rules that hold on every transport (spec 8).
+
+	These go through the transport directly rather than through the client, because
+	what is being checked is a message the client is not able to construct: a batch
+	has no id for a response to bind to.
+
+	Args:
+		client (Client): Connected to the server under test.
+		report (Report): Where to record results.
+		profile (dict): The server's describe result.
+	"""
+	print("\n  transport")
+
+	reply = client.transport.request_raw([
+		{"jsonrpc": "2.0", "id": 90001, "method": "memory/describe", "params": {}},
+		{"jsonrpc": "2.0", "id": 90002, "method": "memory/describe", "params": {}},
+	])
+
+	report.check("a batch is refused with -32600",
+	             isinstance(reply, dict) and reply.get("error", {}).get("code") == INVALID_REQUEST,
+	             reply)
+
+	if isinstance(client.transport, HttpTransport):
+		test_http_binding(client, report)
+	else:
+		report.skip("http binding suite", "not an http transport")
+
+
+def test_http_binding(client: Client, report: Report) -> None:
+	"""Check the HTTP-only rules of spec 8.3: origin, version header, well-known.
+
+	Args:
+		client (Client): Connected over HTTP to the server under test.
+		report (Report): Where to record results.
+	"""
+	url = client.transport.url
+
+	def probe(target: str, method: str = "GET", headers: dict[str, str] = None, body: bytes = None) -> tuple[int, str]:
+		"""Make one raw HTTP call and return its status and body.
+
+		Returns:
+			tuple: (status, body). A refused request reports its own status rather
+			than raising, since a refusal is what most of these checks want.
+		"""
+		request = urllib.request.Request(target, data=body, headers=headers or {}, method=method)
+		try:
+			with urllib.request.urlopen(request, timeout=10) as response:
+				return response.status, response.read().decode("utf-8", "replace")
+		except urllib.error.HTTPError as exc:
+			return exc.code, exc.read().decode("utf-8", "replace")
+		except urllib.error.URLError as exc:
+			return 0, str(exc.reason)
+
+	rpc  = {"jsonrpc": "2.0", "id": 90003, "method": "memory/describe", "params": {}}
+	body = json.dumps(rpc).encode("utf-8")
+
+	status, _ = probe(url, "POST", {"Content-Type": "application/json", "Origin": "https://evil.example"}, body)
+	report.check("a foreign Origin is refused with 403", status == 403, status)
+
+	status, raw = probe(url, "POST", {
+		"Content-Type"        : "application/json",
+		"A2M-Protocol-Version": "a2m/99.0",
+	}, body)
+	refused = status == 400 and json.loads(raw).get("error", {}).get("code") == PROTOCOL_NOT_SUPPORTED
+	report.check("an incompatible version header is refused with 400 and -32007", refused, (status, raw[:120]))
+
+	status, _ = probe(url, "GET")
+	report.check("GET on the rpc endpoint is 405", status == 405, status)
+
+	well_known = url.rstrip("/").rsplit("/", 1)[0] if url.count("/") > 3 else url.rstrip("/")
+	status, raw = probe(f"{well_known}/.well-known/a2m-server.json")
+	if status == 200:
+		document = json.loads(raw)
+		report.check("the well-known profile reports the protocol",
+		             document.get("protocol") == PROTOCOL, document.get("protocol"))
+	else:
+		report.skip("well-known profile", "not served -- it is a SHOULD, not a MUST")
+
+
 def run(client: Client) -> Report:
 	"""Run every applicable suite against a server.
 
@@ -589,6 +672,7 @@ def run(client: Client) -> Report:
 	declared = set(profile.get("capabilities", []))
 
 	test_core(client, report, profile)
+	test_transport(client, report, profile)
 	test_undeclared(client, report, profile)
 
 	for capability, suite in (("tiers", test_tiers), ("salience", test_salience),

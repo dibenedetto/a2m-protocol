@@ -52,9 +52,9 @@ from   typing    import Any, Callable
 
 from   a2m       import (
 	A2M_CAPABILITIES, A2M_VERSION, CAPABILITY_NOT_SUPPORTED, INVALID_PARAMS,
-	UNKNOWN_TIER, MemoryClient, connect_stdio,
+	UNKNOWN_TIER, MemoryClient, connect_stdio, serve_a2m_http,
 )
-from   jsonrpc   import Dispatcher, JsonRpcError, serve_http, serve_stdio
+from   jsonrpc   import Dispatcher, JsonRpcError, serve_stdio
 from   memory    import KINDS, MemoryTier, default_tiers, recency
 
 
@@ -303,7 +303,7 @@ class MemoryRouter:
 		                     "keys", "embeddings", "external"]
 		self.methods      = [m for c in self.capabilities for m in A2M_CAPABILITIES.get(c, [])]
 
-		self.dispatcher = Dispatcher()
+		self.dispatcher = Dispatcher(allow_batch=False)   # spec §8: no batches
 		handlers = {
 			"memory/describe"    : self.describe,
 			"memory/remember"    : self.remember,
@@ -1017,7 +1017,7 @@ def main() -> int:
 			index = argv.index("--http")
 			port  = int(argv[index + 1]) if len(argv) > index + 1 else 8778
 			print(f"A2M router ({merge}) on http://127.0.0.1:{port}/ over {len(backends)} backends", file=sys.stderr)
-			serve_http(router.dispatcher, port=port).serve_forever()
+			serve_a2m_http(router, port=port).serve_forever()
 		else:
 			serve_stdio(router.dispatcher)
 	finally:

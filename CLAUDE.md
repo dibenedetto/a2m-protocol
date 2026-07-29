@@ -20,29 +20,60 @@ memory.py                  the reference stack: records, tiers, consolidation
 a2m.py                     reference A2M server + client (all capabilities)
 
 a2m_minimal.py             independent core-only server. IMPORTS NOTHING FROM HERE.
+a2m_client.py              independent client + CLI. IMPORTS NOTHING FROM HERE.
 a2m_conformance.py         conformance suite. Speaks only the protocol.
-a2m_store.py               sample: persistent, SQLite, one TierStore per tier
-a2m_router.py              sample: federated, one A2M server per tier
+a2m_store.py               reference store: persistent, SQLite, one TierStore per tier
+a2m_postgres.py            the same tier logic on PostgreSQL + pgvector. Optional dep.
+a2m_router.py              reference federation: one A2M server per tier
 demo_a2m_stack.py          both topologies, end to end
 bench_embeddings.py        which embedding model, measured
 test_a2m.py                implementation tests
+
+adapters/langchain.py      LangChain chat history + retriever. Optional dep.
+adapters/agno.py           Agno VectorDb. Optional dep.
+examples/cross_framework.py  both frameworks, one store, 6/6
 ```
+
+`adapters/` is the only place a third-party import is allowed, and
+`adapters/__init__.py` imports none of them — a checkout without langchain-core
+or agno must still run every test, every conformance target and both demos.
 
 ## How to check anything
 
 ```bash
-python test_a2m.py                    # 212 checks, offline, no test runner
+python test_a2m.py                    # 219 checks, offline, no test runner
 python -m doctest memory.py text.py retrieval.py jsonrpc.py    # examples are real
-python a2m_conformance.py --stdio python a2m.py            # 77/77
-python a2m_conformance.py --stdio python a2m_minimal.py    # 33/33, 7 skipped
-python a2m_conformance.py --stdio python a2m_store.py s.db # 77/77
-python a2m_conformance.py --stdio python a2m_router.py r/  # 77/77
+python a2m_conformance.py --stdio python a2m.py            # 78/78
+python a2m_conformance.py --stdio python a2m_minimal.py    # 34/34, 8 skipped
+python a2m_conformance.py --stdio python a2m_store.py s.db # 78/78
+python a2m_conformance.py --stdio python a2m_router.py r/  # 78/78
+python a2m_conformance.py --stdio node --experimental-strip-types a2m_minimal.ts  # 34/34
 python demo_a2m_stack.py && python demo_a2m_stack.py --router   # 18/18 each
+
+# PostgreSQL target, needs a server with pgvector:
+docker run -d --name a2m-pg -e POSTGRES_PASSWORD=a2m -e POSTGRES_USER=a2m \
+  -e POSTGRES_DB=a2m -p 55432:5432 pgvector/pgvector:pg16
+python a2m_conformance.py --stdio python a2m_postgres.py \
+  postgresql://a2m:a2m@127.0.0.1:55432/a2m                 # 78/78
+
+python a2m_client.py --stdio python a2m_minimal.py -- describe  # the client, by hand
 ```
 
-**A change is not done until all four conformance targets still pass.** They
-share no storage code, so a change that passes only against `a2m.py` has
-probably leaked an implementation assumption into the protocol layer.
+Over HTTP the suite runs five more checks that stdio cannot reach — Origin,
+version header, 405, well-known — for **82/82**. Start a server with `--http`
+first, then `python a2m_conformance.py --http http://127.0.0.1:8778/`.
+
+**A change is not done until all six conformance targets still pass.** They share
+no storage code — one is not even Python, one needs a database — so a change that
+passes only against `a2m.py` has probably leaked an implementation assumption
+into the protocol layer. If Postgres is not running, say so rather than reporting
+five of six as a pass.
+
+`a2m_store.py` and `a2m_postgres.py` **do** share code, and deliberately:
+`TieredMemoryStack` holds every tier decision and touches no SQL, while
+`TierStore` subclasses hold the storage. Tier logic goes in the former or it goes
+in neither. If you find yourself writing SQL in the stack, that is the bug the
+Postgres port was written to catch.
 
 Docstring examples are executed by doctest. If you write one, it must be true.
 
@@ -77,6 +108,14 @@ Docstring examples are executed by doctest. If you write one, it must be true.
   `revision`. Appending instead leaves the stale fact recallable.
 - **`working` capacity is per session.** Otherwise a busy conversation evicts a
   quiet one's context by talking more.
+- **No batches, no server-initiated requests.** Every binding carries single
+  JSON-RPC objects; an array is `-32600`. Both rules exist to match MCP, so an
+  agent runtime that already speaks it needs no second code path (DECISION 021).
+  `MemoryServer` and `MemoryRouter` build `Dispatcher(allow_batch=False)`.
+- **Over HTTP, an unpermitted `Origin` is 403.** The interesting deployment is
+  local and unauthenticated, which is exactly where a browsed page could
+  otherwise drain the agent's memory. Use `serve_a2m_http`, never bare
+  `serve_http` — the bare one has no version header and no well-known profile.
 
 ## Style
 
@@ -98,7 +137,8 @@ New functionality **should** arrive as a capability rather than as a change to
 an existing method.
 
 If you change the wire format, update in the same commit: the spec, the JSON
-schema, `a2m.py`, `a2m_minimal.py`, `a2m_conformance.py`, and both samples.
+schema, `a2m.py`, `a2m_minimal.py`, `a2m_minimal.ts`, `a2m_client.py`,
+`a2m_conformance.py`, `a2m_store.py` and `a2m_router.py`.
 `a2m_minimal.py` is the one people forget — and it is the one that proves the
 spec is implementable from the document alone, so letting it rot defeats its
 purpose.

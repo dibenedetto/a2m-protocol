@@ -383,6 +383,7 @@ def handle(payload):
 	Returns:
 		dict | None: The response, or None for a notification.
 	"""
+	# A JSON array here is a JSON-RPC batch, which A2M does not use (spec 8).
 	if not isinstance(payload, dict):
 		return error(None, INVALID_REQUEST, "Request must be a JSON object")
 

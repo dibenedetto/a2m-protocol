@@ -11,15 +11,18 @@ speaks only A2M and never imports what it is testing.
 """
 
 
+import json
 import sys
 import threading
+import urllib.error
+import urllib.request
 
 
 from   typing    import Any, Callable
 
 
-from   a2m       import MemoryServer, connect_http, connect_local, connect_stdio
-from   jsonrpc   import Client, Dispatcher, JsonRpcError, LocalTransport, serve_http
+from   a2m       import MemoryServer, connect_http, connect_local, connect_stdio, serve_a2m_http
+from   jsonrpc   import Client, Dispatcher, JsonRpcError, LocalTransport
 from   memory    import MemoryStack, MemoryTier, from_rfc3339, to_rfc3339
 from   retrieval import EmbeddingScorer, HybridScorer, LexicalScorer, cosine, llm_consolidator, make_scorer
 from   text      import detect, tokenize
@@ -817,7 +820,7 @@ def test_a2m_spec() -> None:
 def test_a2m_http() -> None:
 	print("== a2m over http ==")
 
-	server = serve_http(MemoryServer(name="http-memory").dispatcher, port=8791)
+	server = serve_a2m_http(MemoryServer(name="http-memory"), port=8791)
 	thread = threading.Thread(target=server.serve_forever, daemon=True)
 	thread.start()
 
@@ -839,6 +842,24 @@ def test_a2m_http() -> None:
 		# A notification gets 202 and no body.
 		memory.client.notify("memory/consolidate", {})
 		check("notifications are accepted", True)
+
+		# spec §8.3.1 -- an origin the server does not permit never reaches a handler.
+		blocked = urllib.request.Request(
+			"http://127.0.0.1:8791/",
+			data    = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "memory/describe"}).encode("utf-8"),
+			headers = {"Content-Type": "application/json", "Origin": "https://evil.example"},
+			method  = "POST",
+		)
+		try:
+			urllib.request.urlopen(blocked, timeout=5)
+			check("a foreign origin is refused", False)
+		except urllib.error.HTTPError as exc:
+			check("a foreign origin is refused", exc.code == 403, exc.code)
+
+		# spec §8.3.3 -- the profile is served without an A2M client.
+		with urllib.request.urlopen("http://127.0.0.1:8791/.well-known/a2m-server.json", timeout=5) as response:
+			profile = json.loads(response.read().decode("utf-8"))
+		check("the well-known profile is served", profile.get("protocol") == "a2m/0.1", profile.get("protocol"))
 	finally:
 		server.shutdown()
 		server.server_close()
@@ -856,6 +877,49 @@ def test_a2m_stdio() -> None:
 		check("remote timeline", len(memory.timeline()) == 1)
 	finally:
 		memory.close()
+
+
+def test_a2m_client() -> None:
+	"""The independent client, against two servers that share no code with it.
+
+	a2m_client.py imports nothing from this project, so this is the only place
+	that proves it still works -- the conformance suite tests servers, and nothing
+	tests a client from outside.
+	"""
+	print("== a2m_client, independent ==")
+
+	import a2m_client
+
+	# Against the reference server: everything declared.
+	memory = a2m_client.connect_stdio([sys.executable, "a2m.py", "client-target"])
+	try:
+		check("independent describe", memory.describe()["name"] == "client-target", memory.describe().get("name"))
+
+		memory.remember("the fallback region is eu-central-1", tier="episodic")
+		recalled = memory.recall("which fallback region")
+		check("independent recall", recalled and "eu-central-1" in recalled[0]["content"], recalled)
+
+		# spec §4.2 -- the same id twice is one record, which is what makes a retry safe.
+		id = "fixed-id-for-idempotency"
+		memory.remember("written once", id=id, tier="episodic")
+		memory.remember("written once", id=id, tier="episodic")
+		written = [r for r in memory.timeline(tier="episodic") if r.get("id") == id]
+		check("a repeated id writes once", len(written) == 1, written)
+	finally:
+		memory.close()
+
+	# Against the core-only server: the guard must refuse before the wire.
+	minimal = a2m_client.connect_stdio([sys.executable, "a2m_minimal.py"])
+	try:
+		check("core-only server declares core only", minimal.capabilities == ["core"], minimal.capabilities)
+
+		try:
+			minimal.fetch("user/city")
+			check("an undeclared capability is refused locally", False)
+		except a2m_client.A2MError as exc:
+			check("an undeclared capability is refused locally", exc.code == -32003, exc.code)
+	finally:
+		minimal.close()
 
 
 def main() -> int:
@@ -877,6 +941,7 @@ def main() -> int:
 	test_a2m_spec()
 	test_a2m_http()
 	test_a2m_stdio()
+	test_a2m_client()
 
 	print()
 	print(f"{len(PASSED)} passed, {len(FAILED)} failed")
