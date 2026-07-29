@@ -22,6 +22,7 @@
         "sessions",
         "embeddings",
         "keys",
+        "external",
         "events"
       ]
     },
@@ -105,6 +106,21 @@
             "type": "number"
           },
           "description": "capability: embeddings. Returned only when requested."
+        },
+        "uri": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uri-reference",
+          "description": "capability: external"
+        },
+        "media_type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "capability: external"
         }
       }
     },
@@ -160,6 +176,21 @@
             "type": "number"
           },
           "minItems": 1
+        },
+        "uri": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uri-reference",
+          "description": "capability: external"
+        },
+        "media_type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "capability: external"
         }
       }
     },

@@ -299,7 +299,8 @@ class MemoryRouter:
 		if not self.order:
 			raise ValueError("No backend matches any configured tier")
 
-		self.capabilities = ["core", "tiers", "salience", "scopes", "sessions", "keys", "embeddings"]
+		self.capabilities = ["core", "tiers", "salience", "scopes", "sessions",
+		                     "keys", "embeddings", "external"]
 		self.methods      = [m for c in self.capabilities for m in A2M_CAPABILITIES.get(c, [])]
 
 		self.dispatcher = Dispatcher()
@@ -757,6 +758,8 @@ class MemoryRouter:
 			"owner"    : r.get("owner"),
 			"session"  : r.get("session"),
 			"key"      : r.get("key"),
+			"uri"      : r.get("uri"),
+			"media_type": r.get("media_type"),
 			"tier"     : target,
 		} for r in records]
 

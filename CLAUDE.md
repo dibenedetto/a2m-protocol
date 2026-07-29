@@ -31,12 +31,12 @@ test_a2m.py                implementation tests
 ## How to check anything
 
 ```bash
-python test_a2m.py                    # 200 checks, offline, no test runner
+python test_a2m.py                    # 212 checks, offline, no test runner
 python -m doctest memory.py text.py retrieval.py jsonrpc.py    # examples are real
-python a2m_conformance.py --stdio python a2m.py            # 71/71
-python a2m_conformance.py --stdio python a2m_minimal.py    # 33/33, 6 skipped
-python a2m_conformance.py --stdio python a2m_store.py s.db # 71/71
-python a2m_conformance.py --stdio python a2m_router.py r/  # 71/71
+python a2m_conformance.py --stdio python a2m.py            # 77/77
+python a2m_conformance.py --stdio python a2m_minimal.py    # 33/33, 7 skipped
+python a2m_conformance.py --stdio python a2m_store.py s.db # 77/77
+python a2m_conformance.py --stdio python a2m_router.py r/  # 77/77
 python demo_a2m_stack.py && python demo_a2m_stack.py --router   # 18/18 each
 ```
 
@@ -70,6 +70,9 @@ Docstring examples are executed by doctest. If you write one, it must be true.
 - **A caller's embedding is stored verbatim.** Never regenerate it, never
   replace it, in any tier. A store that re-embeds moves every record into its own
   model's space, which is the interoperability failure A2M exists to remove.
+- **The server never dereferences a `uri`.** Not on write, not on recall, not
+  in the background. Fetching a caller's URI is server-side request forgery in a
+  component whose job is accepting arbitrary strings from agents.
 - **Writing to an occupied key replaces.** It keeps the id and advances
   `revision`. Appending instead leaves the stale fact recallable.
 - **`working` capacity is per session.** Otherwise a busy conversation evicts a
@@ -102,10 +105,9 @@ purpose.
 
 ## Open questions
 
-Carried from the pre-0.1 draft: `external` records — a record pointing at a
-file, URL or blob rather than holding text — remains unexpressible. Caller-owned
-embeddings and addressable keys landed in 0.1; hierarchical namespaces were
-folded into keys (DECISIONS 017).
+Everything carried from the pre-0.1 draft is now settled: caller-owned
+embeddings, addressable keys and external records all landed in 0.1, and
+hierarchical namespaces were folded into keys (DECISIONS 017, 018, 019).
 
 Also unresolved: `events` is declared as a capability but no notification
 transport is specified beyond JSON-RPC notifications, and neither sample emits

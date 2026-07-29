@@ -83,6 +83,7 @@ and layers the rest into **capabilities** a server declares and a client checks.
 | `sessions` | `session/list` `session/close` | no |
 | `keys` | `fetch` *(adds `key`: addressable, upsert)* | no |
 | `embeddings` | *(adds `embedding`: caller-owned, verbatim)* | no |
+| `external` | *(adds `uri`: points at a file, URL or blob)* | no |
 
 A call into an undeclared capability returns `-32003 CAPABILITY_NOT_SUPPORTED` —
 **not** `-32601`, which a client cannot distinguish from a typo.
@@ -173,10 +174,10 @@ suite passes against all of them:
 
 | | storage | declares | conformance |
 |---|---|---|---|
-| [a2m.py](a2m.py) | a dict in memory | everything | 71/71 |
+| [a2m.py](a2m.py) | a dict in memory | everything | 77/77 |
 | [a2m_minimal.py](a2m_minimal.py) | a dict, stdlib only | `core` only | 33/33 |
-| [a2m_store.py](a2m_store.py) | SQLite, one store per tier | everything | 71/71 |
-| [a2m_router.py](a2m_router.py) | four A2M servers | everything | 71/71 |
+| [a2m_store.py](a2m_store.py) | SQLite, one store per tier | everything | 77/77 |
+| [a2m_router.py](a2m_router.py) | four A2M servers | everything | 77/77 |
 
 [a2m_minimal.py](a2m_minimal.py) imports **nothing from this repository**. It
 exists to answer a question the reference implementation cannot: *is the
@@ -205,7 +206,7 @@ than one spreading across `0..1` — spec §5.3.
 ## Running it
 
 ```
-python test_a2m.py                          # 200 checks, offline
+python test_a2m.py                          # 212 checks, offline
 python demo_a2m_stack.py                    # the whole stack, on disk
 python demo_a2m_stack.py --router           # same, federated across processes
 python a2m_store.py memory.db               # a persistent server on stdio
@@ -232,6 +233,7 @@ is **not gone** — it remains in this repository's history at commit
 | addressing | hierarchical namespaces, recursive reads | `key_prefix`, plus `owner` and `session` |
 | identity | caller-set `key`, upsert by key | **both** — opaque `id` *and* addressable `key` |
 | embeddings | **caller-owned**, stored verbatim | **both** — caller-owned, or server-side |
+| record kinds | `external` as a fifth *type* | `external` as a record *property*, legal in any tier |
 | events | `WS /subscribe` | `events` capability, JSON-RPC notifications |
 | conformance | — | executable suite, four passing implementations |
 
@@ -259,13 +261,16 @@ replaced:
   rather than compared: cosine between vectors of different lengths is not a
   worse answer, it is not an answer.
 
-One idea remains open:
-
-- **`external` records** — a record that points at a file, URL or blob rather
-  than holding text. 0.1 still has no way to express one.
+- **External records** (`external`). A record may point at a file, URL or blob
+  instead of containing it. `content` keeps its ordinary meaning — the text that
+  gets indexed, so the reference is findable — while `uri` says where the real
+  thing lives. The server **never dereferences it**: fetching a caller's URI
+  would make every write a request the server chose to issue to an address its
+  caller supplied.
 
 Hierarchical namespaces were **folded into keys** rather than added as a
-separate dimension; see [DECISIONS.md](DECISIONS.md) 017.
+separate dimension; see [DECISIONS.md](DECISIONS.md) 017. All four of the
+draft's ideas are now either in 0.1 or accounted for.
 
 ---
 

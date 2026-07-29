@@ -217,6 +217,8 @@ def to_record(row: sqlite3.Row, tier: str) -> MemoryRecord:
 		key        = row["akey"],
 		revision   = row["revision"],
 		embedding  = unpack(row["embedding"]) if row["embedding"] else None,
+		uri        = row["uri"],
+		media_type = row["media_type"],
 	)
 	record.accessed_at  = row["accessed_at"]
 	record.access_count = row["access_count"]
@@ -238,6 +240,8 @@ COLUMNS = """
 	akey         TEXT,
 	revision     INTEGER NOT NULL DEFAULT 0,
 	embedding    BLOB,
+	uri          TEXT,
+	media_type   TEXT,
 	salience     REAL    NOT NULL DEFAULT 1.0,
 	created_at   REAL    NOT NULL,
 	accessed_at  REAL    NOT NULL,
@@ -278,11 +282,11 @@ class WorkingStore(TierStore):
 		self.db.execute(
 			"""INSERT OR IGNORE INTO working
 			   (id, content, role, metadata, grp, owner, session, akey, revision,
-			    embedding, salience, created_at, accessed_at, access_count)
-			   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+			    embedding, uri, media_type, salience, created_at, accessed_at, access_count)
+			   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
 			(record.id, record.content, record.role, json.dumps(record.metadata), record.group,
 			 record.owner, record.session, record.key, record.revision,
-			 pack(record.embedding) if record.embedding else None,
+			 pack(record.embedding) if record.embedding else None, record.uri, record.media_type,
 			 record.salience, record.created_at, record.accessed_at, record.access_count),
 		)
 
@@ -419,11 +423,12 @@ class DurableStore(TierStore):
 		self.db.execute(
 			f"""INSERT OR IGNORE INTO {self.TABLE}
 			    (id, content, role, metadata, grp, owner, session, akey, revision, embedding,
-			     salience, created_at, accessed_at, access_count, tier, seq)
-			    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+			     uri, media_type, salience, created_at, accessed_at, access_count, tier, seq)
+			    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
 			(record.id, record.content, record.role, json.dumps(record.metadata), record.group,
 			 record.owner, record.session, record.key, record.revision,
 			 pack(embedding or record.embedding) if (embedding or record.embedding) else None,
+			 record.uri, record.media_type,
 			 record.salience, record.created_at, record.accessed_at,
 			 record.access_count, record.tier,
 			 int(record.created_at * 1_000_000)),
@@ -616,11 +621,12 @@ class ProceduralStore(TierStore):
 		self.db.execute(
 			"""INSERT OR IGNORE INTO procedural
 			   (id, content, role, metadata, grp, owner, session, akey, revision, embedding,
-			    salience, created_at, accessed_at, access_count, path)
-			   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+			    uri, media_type, salience, created_at, accessed_at, access_count, path)
+			   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
 			(record.id, "", record.role, json.dumps(record.metadata), record.group, record.owner,
 			 record.session, record.key, record.revision,
-			 pack(record.embedding) if record.embedding else None, record.salience,
+			 pack(record.embedding) if record.embedding else None,
+			 record.uri, record.media_type, record.salience,
 			 record.created_at, record.accessed_at, record.access_count, str(path)),
 		)
 
@@ -903,6 +909,8 @@ class SqliteMemoryStack:
 		session  : str            = None,
 		key      : str            = None,
 		embedding: list[float]    = None,
+		uri      : str            = None,
+		media_type: str           = None,
 	) -> MemoryRecord:
 		"""Write one record to the store that owns its tier.
 
@@ -947,6 +955,10 @@ class SqliteMemoryStack:
 						held.metadata = dict(metadata)
 					if embedding is not None:
 						held.embedding = list(embedding)
+					if uri is not None:
+						held.uri = uri
+					if media_type is not None:
+						held.media_type = media_type
 					if tier is not None:
 						held.tier = self.tier(tier).name
 					self._place(held)
@@ -967,9 +979,11 @@ class SqliteMemoryStack:
 				metadata = metadata,
 				owner     = owner,
 				session   = session,
-				key       = key,
-				embedding = embedding,
-				id        = id,
+				key        = key,
+				embedding  = embedding,
+				uri        = uri,
+				media_type = media_type,
+				id         = id,
 			)
 
 			# Working memory is never embedded: it is replayed, not searched, and

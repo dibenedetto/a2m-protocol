@@ -105,6 +105,8 @@ class MemoryRecord:
 		key        : str            = None,
 		embedding  : list[float]    = None,
 		revision   : int            = 0,
+		uri        : str            = None,
+		media_type : str            = None,
 	) -> None:
 		"""Create one remembered thing.
 
@@ -155,6 +157,16 @@ class MemoryRecord:
 		# frameworks embedding with different models can share one store without
 		# silently comparing numbers from incomparable spaces.
 		self.embedding    = list(embedding) if embedding else None
+
+		# Where the real thing lives, when the record is a reference rather than
+		# the thing itself. `content` still carries whatever text should be
+		# indexed -- a title, a summary, an extracted passage -- because a record
+		# that is only a URI cannot be recalled by anything except its address.
+		#
+		# The store never dereferences this. Fetching a caller's URI would make
+		# every write a request the server chose to make on the client's behalf.
+		self.uri          = uri
+		self.media_type   = media_type
 
 
 	def touch(self, now: float = None) -> None:
@@ -210,6 +222,8 @@ class MemoryRecord:
 			"session"      : self.session,
 			"key"          : self.key,
 			"revision"     : self.revision,
+			"uri"          : self.uri,
+			"media_type"   : self.media_type,
 		}
 		if score is not None:
 			record["score"] = score
@@ -544,6 +558,8 @@ class MemoryStack:
 		session  : str            = None,
 		key      : str            = None,
 		embedding: list[float]    = None,
+		uri      : str            = None,
+		media_type: str           = None,
 	) -> MemoryRecord:
 		"""Write one record.
 
@@ -604,6 +620,10 @@ class MemoryStack:
 						held.metadata = dict(metadata)
 					if embedding is not None:
 						held.embedding = list(embedding)
+					if uri is not None:
+						held.uri = uri
+					if media_type is not None:
+						held.media_type = media_type
 					if tier is not None:
 						held.tier = self.tier(tier).name
 					held.salience   = float(salience)
@@ -622,9 +642,11 @@ class MemoryStack:
 			metadata  = metadata,
 			owner     = owner,
 			session   = session,
-			key       = key,
-			embedding = embedding,
-			id        = id,
+			key        = key,
+			embedding  = embedding,
+			uri        = uri,
+			media_type = media_type,
+			id         = id,
 		)
 
 		with self._lock:

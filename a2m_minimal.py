@@ -204,6 +204,9 @@ def remember(records=None, **ignored) -> dict:
 		if entry.get("embedding") is not None:
 			raise A2MError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'embeddings' capability")
 
+		if entry.get("uri") is not None:
+			raise A2MError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'external' capability")
+
 		# spec §3.2 -- a client-supplied id makes the write idempotent.
 		id = entry.get("id")
 		if id is not None and id in RECORDS:

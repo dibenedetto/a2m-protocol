@@ -666,6 +666,52 @@ def test_caller_embeddings() -> None:
 		check("embeddings without the capability are refused", exc.code == -32003, exc.code)
 
 
+def test_external() -> None:
+	print("== external records ==")
+
+	stack = MemoryStack()
+	record = stack.remember("Deployment runbook: rotating the vault key",
+	                        tier="procedural", key="docs/runbook",
+	                        uri="file:///docs/runbook.md", media_type="text/markdown")
+
+	check("a record can carry a reference", record.uri == "file:///docs/runbook.md")
+	check("and a media type"              , record.media_type == "text/markdown")
+	check("content is still what is indexed",
+	      [r.content for r, _ in stack.recall("how do I rotate the vault key")] == [record.content])
+
+	# external is a property of content, not a tier kind: the same reference is
+	# legal in any tier, because where it belongs is the caller's judgement.
+	stack.remember("the onboarding guide", tier="semantic",
+	               uri="https://example.com/onboarding", media_type="text/html")
+	check("a reference is legal in any tier",
+	      sorted(r.tier for r in stack.records.values() if r.uri) == ["procedural", "semantic"])
+
+	check("uri is filterable like any field",
+	      len(stack.timeline(where={"media_type": "text/html"})) == 1)
+
+	# A reference with no text is legal, and honestly unfindable by search.
+	bare = stack.remember("", key="docs/blob", uri="s3://bucket/blob.bin")
+	check("a reference with no text is accepted", bare.uri.startswith("s3://"))
+	check("but is not findable by content"      ,
+	      all(r.id != bare.id for r, _ in stack.recall("blob")))
+	check("it is still reachable by key"        , stack.by_key("docs/blob").id == bare.id)
+
+	# Over the wire.
+	memory = connect_local(MemoryStack())
+	check("external is declared", "external" in memory.capabilities(), memory.capabilities())
+	memory.remember("a referenced document", uri="https://example.com/doc", media_type="text/html")
+	got = memory.recall(query="referenced document")
+	check("the uri round-trips", got and got[0]["uri"] == "https://example.com/doc", got)
+	check("the media type too" , got and got[0]["media_type"] == "text/html")
+
+	limited = connect_local(MemoryStack(), capabilities=["core"])
+	try:
+		limited.remember("x", uri="file:///x")
+		check("a uri without the capability is refused", False)
+	except JsonRpcError as exc:
+		check("a uri without the capability is refused", exc.code == -32003, exc.code)
+
+
 def test_a2m_local() -> None:
 	print("== a2m, in-process ==")
 
@@ -826,6 +872,7 @@ def main() -> int:
 	test_sessions()
 	test_keys()
 	test_caller_embeddings()
+	test_external()
 	test_a2m_local()
 	test_a2m_spec()
 	test_a2m_http()

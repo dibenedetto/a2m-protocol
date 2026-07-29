@@ -328,3 +328,38 @@ working-tier record was silently dropped — "stored verbatim" quietly untrue fo
 three tiers out of four. Every table now carries the column, and a record's own
 vector is searchable wherever it lives. The store still never *generates* one for
 working memory; it just no longer discards what it was handed.
+
+---
+
+## 019 — External records, and why they are not a fifth kind
+
+**Decision.** A record **MAY** carry a `uri` pointing at a file, URL or blob,
+with an optional `media_type`. `content` keeps its ordinary meaning: the text
+that gets indexed. The server **MUST NOT** dereference the `uri`.
+
+**Why not a fifth `kind`.** The pre-0.1 draft listed `external` alongside
+working, episodic, semantic and procedural, as a fifth memory *type*. But the
+four kinds describe **lifetime and access pattern** — how long a record lives
+and whether it is replayed or searched. "Points at a file" describes **content**,
+and says nothing about either. A referenced design document is a fact and belongs
+in `semantic`; a referenced runbook is a procedure and belongs in `procedural`.
+Making it a kind would force the caller to choose between saying *what a record
+is for* and saying *where its bytes are*, when those are independent.
+
+So it is a record property with its own capability, and a reference is legal in
+any tier.
+
+**Why `content` still matters.** A record that is only a URI is unrecallable by
+anything except its address, because there is nothing for a scorer to rank. That
+is legal — `by_key` still finds it — but the useful shape is a title, a summary
+or an extracted passage in `content`, with `uri` saying where to go for the rest.
+This is how a citation works, and it is why the two fields are not redundant.
+
+**Why the server must not fetch.** A memory server's entire job is accepting
+arbitrary strings from agents. A server that dereferences those strings is
+issuing requests of its own choosing to addresses its callers supplied — a
+server-side request forgery primitive, sitting behind whatever network position
+and credentials the memory service happens to have. Resolution belongs to the
+client, which already has the context to know whether a URI should be fetched at
+all. This is the same family of rule as 004: the dangerous default is the
+convenient one.

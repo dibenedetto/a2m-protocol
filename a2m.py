@@ -20,6 +20,7 @@ a service across the network.
 	          memory/session/close  end one and let it percolate down the stack
 	keys      memory/fetch          read the record at an address
 	embeddings                      caller-owned vectors, stored verbatim
+	external                        records that point at a file, URL or blob
 
 This server declares every capability. A store that cannot do tiers or salience
 is still conformant if it declares only `core` — see a2m_minimal.py, which is
@@ -65,6 +66,7 @@ A2M_CAPABILITIES = {
 	"sessions"   : ["memory/session/list", "memory/session/close"],
 	"embeddings" : [],
 	"keys"       : ["memory/fetch"],
+	"external"   : [],
 	"events"     : [],
 }
 
@@ -282,6 +284,9 @@ class MemoryServer:
 			if entry.get("key", None) is not None and not self.supports("keys"):
 				raise JsonRpcError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'keys' capability")
 
+			if entry.get("uri", None) is not None and not self.supports("external"):
+				raise JsonRpcError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'external' capability")
+
 			if entry.get("embedding", None) is not None:
 				if not self.supports("embeddings"):
 					raise JsonRpcError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'embeddings' capability")
@@ -299,6 +304,8 @@ class MemoryServer:
 					session  = entry.get("session" , session),
 					key      = entry.get("key"     , None  ),
 					embedding= entry.get("embedding", None ),
+					uri      = entry.get("uri"     , None  ),
+					media_type = entry.get("media_type", None),
 					id       = entry.get("id"      , None  ),
 				)
 			except KeyError as exc:

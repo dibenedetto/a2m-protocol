@@ -141,7 +141,7 @@ def test_core(client: Client, report: Report, profile: dict[str, Any]) -> None:
 	declared = set(profile.get("capabilities", []))
 	report.check("declared capabilities are known",
 	             declared <= {"core", "tiers", "salience", "scopes", "sessions",
-	                          "embeddings", "keys", "events"},
+	                          "embeddings", "keys", "external", "events"},
 	             declared)
 
 	expect_error(report, "an incompatible protocol is rejected", PROTOCOL_NOT_SUPPORTED,
@@ -490,6 +490,48 @@ def test_embeddings(client: Client, report: Report, profile: dict[str, Any]) -> 
 	client.call("memory/forget", {"ids": ids})
 
 
+def test_external(client: Client, report: Report, profile: dict[str, Any]) -> None:
+	"""Check the 'external' capability: references stored, never dereferenced.
+
+	The check that cannot be automated from outside is the important one -- that
+	the server does not fetch the URI. A `file:///` reference to a path that does
+	not exist stands in: a server that dereferenced would fail the write.
+
+	Args:
+		client (Client): Connected to the server under test.
+		report (Report): Where to record results.
+		profile (dict): The server's describe result.
+	"""
+	print("\n  external")
+
+	marker = uuid.uuid4().hex[:8]
+	uri    = f"file:///nonexistent/{marker}/runbook.md"
+
+	written = client.call("memory/remember", {"records": [{
+		"content"    : f"deployment runbook {marker}: rotating the vault key",
+		"uri"        : uri,
+		"media_type" : "text/markdown",
+	}]})
+	ids = written.get("ids", [])
+	report.check("a record can carry a reference", len(ids) == 1, written)
+
+	found = client.call("memory/recall", {"query": f"runbook {marker} vault key", "limit": 1}).get("records", [])
+	report.check("an external record is findable by its indexed text", found, found)
+
+	if found:
+		record = found[0]
+		report.check("the uri round-trips unchanged", record.get("uri") == uri, record.get("uri"))
+		report.check("the media type round-trips"   , record.get("media_type") == "text/markdown", record)
+		report.check("content is still the indexed text",
+		             marker in record.get("content", ""), record.get("content"))
+
+	# A server that dereferenced would have failed the write above, since the
+	# path does not exist. Reaching here at all is the evidence.
+	report.check("the server did not dereference the uri", bool(ids))
+
+	client.call("memory/forget", {"ids": ids})
+
+
 def test_undeclared(client: Client, report: Report, profile: dict[str, Any]) -> None:
 	"""Check that undeclared capabilities answer -32003, not -32601.
 
@@ -548,7 +590,8 @@ def run(client: Client) -> Report:
 
 	for capability, suite in (("tiers", test_tiers), ("salience", test_salience),
 	                          ("scopes", test_scopes), ("sessions", test_sessions),
-	                          ("keys", test_keys), ("embeddings", test_embeddings)):
+	                          ("keys", test_keys), ("embeddings", test_embeddings),
+	                          ("external", test_external)):
 		if capability in declared:
 			suite(client, report, profile)
 		else:
