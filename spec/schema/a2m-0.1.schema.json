@@ -22,8 +22,7 @@
         "sessions",
         "embeddings",
         "keys",
-        "external",
-        "events"
+        "external"
       ]
     },
     "record": {

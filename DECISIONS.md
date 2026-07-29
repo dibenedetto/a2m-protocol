@@ -363,3 +363,44 @@ and credentials the memory service happens to have. Resolution belongs to the
 client, which already has the context to know whether a URI should be fetched at
 all. This is the same family of rule as 004: the dangerous default is the
 convenient one.
+
+---
+
+## 020 — `events` is deferred to 0.2, and its name reserved
+
+**Decision.** Drop the `events` capability from 0.1. The name is **reserved** in
+§9.1 as a candidate for 0.2, and a 0.1 server **MUST NOT** declare it.
+
+**Why.** No transport binding in §8 carries a server-initiated message. HTTP is
+one POST endpoint whose connection closes with the response; in-process is a
+function call returning one value. Only stdio can physically carry a
+notification, and there only because the client already tolerates interleaved
+messages while awaiting a response.
+
+So the two notification methods the section defined could not be exercised by
+any of the four conformant implementations. Their wire shape was unproven — the
+one thing this repository's four-implementation discipline exists to prevent, and
+it was true of the *only* section that had no implementation behind it.
+
+**Why reserve rather than simply delete.** A name that is merely absent is a name
+someone else's extension can take. Reserving it costs a paragraph and keeps 0.2
+free to define `events` without colliding with a vendor capability that got there
+first. Reserving is explicitly not a commitment to specify it.
+
+**What 0.2 has to answer, and 0.1 never did.** The section specified payloads and
+skipped everything that makes them implementable:
+
+- **Scoping.** Does a `changed` notification respect `owner`? A broadcast tells
+  agent B that agent A just wrote. 004 says `owner` is partitioning rather than
+  protection — an event channel turns that from *available* into *active*, so
+  this must be settled before any code, not after.
+- **Subscription.** Opt-in, or does declaring the capability mean everything
+  always?
+- **Volume.** A consolidation moving ten thousand records: one notification or
+  ten thousand? `{"tiers": [...]}` implies coalesced and never said so.
+- **Ordering.** May a notification interleave inside a batch response?
+
+**Cost, accepted.** The capability that has no cost is the one nobody depends on
+yet, which is precisely the argument for removing it now. A 0.2 client asking for
+`events` against a 0.1 server gets `-32003`, which is the correct answer and the
+mechanism working as designed (001, 002).

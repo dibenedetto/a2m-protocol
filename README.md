@@ -234,7 +234,7 @@ is **not gone** — it remains in this repository's history at commit
 | identity | caller-set `key`, upsert by key | **both** — opaque `id` *and* addressable `key` |
 | embeddings | **caller-owned**, stored verbatim | **both** — caller-owned, or server-side |
 | record kinds | `external` as a fifth *type* | `external` as a record *property*, legal in any tier |
-| events | `WS /subscribe` | `events` capability, JSON-RPC notifications |
+| events | `WS /subscribe` | deferred — name reserved for 0.2 |
 | conformance | — | executable suite, four passing implementations |
 
 The four memory kinds survived unchanged, having been arrived at twice
@@ -276,6 +276,6 @@ draft's ideas are now either in 0.1 or accounted for.
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE) and spec §11.
+MIT. See [LICENSE](LICENSE) and spec §10.
 
 A protocol that is expensive to implement does not get implemented.

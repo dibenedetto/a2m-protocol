@@ -436,8 +436,8 @@ def error(id, code, message, data=None):
 
 
 def main() -> int:
-	# spec §9.2 -- one JSON value per line; stdout carries nothing else.
-	"""Serve A2M on stdin/stdout, one JSON value per line (spec 9.2).
+	# spec §8.2 -- one JSON value per line; stdout carries nothing else.
+	"""Serve A2M on stdin/stdout, one JSON value per line (spec 8.2).
 
 	Nothing but JSON-RPC may go to stdout; anything else corrupts the stream.
 

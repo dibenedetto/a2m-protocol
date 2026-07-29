@@ -829,7 +829,7 @@ def test_a2m_http() -> None:
 		recalled = memory.recall(query="which fallback region")
 		check("recall over http", recalled and "eu-central-1" in recalled[0]["content"], recalled)
 
-		# spec §9.3 -- protocol errors are 200 with a JSON-RPC error, not an HTTP status.
+		# spec §8.3 -- protocol errors are 200 with a JSON-RPC error, not an HTTP status.
 		try:
 			memory.client.call("memory/forget", {})
 			check("a protocol error is not an http error", False)

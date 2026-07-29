@@ -59,15 +59,14 @@ EMBEDDING_MISMATCH       = -32008
 # undeclared capability with CAPABILITY_NOT_SUPPORTED rather than
 # METHOD_NOT_FOUND, since a client cannot tell the latter from a typo.
 A2M_CAPABILITIES = {
-	"core"     : ["memory/describe", "memory/remember", "memory/recall", "memory/timeline", "memory/forget"],
-	"tiers"    : ["memory/promote", "memory/consolidate"],
-	"salience" : ["memory/reinforce"],
+	"core"       : ["memory/describe", "memory/remember", "memory/recall", "memory/timeline", "memory/forget"],
+	"tiers"      : ["memory/promote", "memory/consolidate"],
+	"salience"   : ["memory/reinforce"],
 	"scopes"     : [],
 	"sessions"   : ["memory/session/list", "memory/session/close"],
 	"embeddings" : [],
 	"keys"       : ["memory/fetch"],
 	"external"   : [],
-	"events"     : [],
 }
 
 A2M_METHODS = [method for methods in A2M_CAPABILITIES.values() for method in methods]
@@ -181,7 +180,8 @@ class MemoryServer:
 		"""Whether this server declares a capability.
 
 		Args:
-			capability (str): core, tiers, salience, scopes, sessions or events.
+			capability (str): core, tiers, salience, scopes, sessions, embeddings,
+				keys or external.
 
 		Returns:
 			bool: True if declared.
@@ -685,7 +685,8 @@ class MemoryClient:
 		not to call into undeclared capabilities.
 
 		Args:
-			capability (str): tiers, salience, scopes, sessions or events.
+			capability (str): tiers, salience, scopes, sessions, embeddings, keys
+				or external.
 
 		Returns:
 			bool: True if declared.

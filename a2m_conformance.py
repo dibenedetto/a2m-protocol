@@ -139,9 +139,12 @@ def test_core(client: Client, report: Report, profile: dict[str, Any]) -> None:
 	report.check("methods is a list"          , isinstance(profile.get("methods"), list))
 
 	declared = set(profile.get("capabilities", []))
+	# 'events' is reserved for a later version (spec 9.1) and is deliberately not
+	# in this set: a 0.1 server declaring it is declaring something 0.1 does not
+	# define, which is exactly what this check is for.
 	report.check("declared capabilities are known",
 	             declared <= {"core", "tiers", "salience", "scopes", "sessions",
-	                          "embeddings", "keys", "external", "events"},
+	                          "embeddings", "keys", "external"},
 	             declared)
 
 	expect_error(report, "an incompatible protocol is rejected", PROTOCOL_NOT_SUPPORTED,

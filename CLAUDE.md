@@ -109,9 +109,11 @@ Everything carried from the pre-0.1 draft is now settled: caller-owned
 embeddings, addressable keys and external records all landed in 0.1, and
 hierarchical namespaces were folded into keys (DECISIONS 017, 018, 019).
 
-Also unresolved: `events` is declared as a capability but no notification
-transport is specified beyond JSON-RPC notifications, and neither sample emits
-any.
+`events` is **out of 0.1** and its name reserved for 0.2 (spec §9.1, DECISION
+020). No transport in §8 carries a server-initiated message, so nothing could
+exercise it. **Do not re-add it to `A2M_CAPABILITIES`** — the conformance suite
+now fails a server that declares it. Reviving it in 0.2 means answering the four
+questions in DECISION 020 first, of which `owner` scoping is the one with teeth.
 
 ## Provenance
 
