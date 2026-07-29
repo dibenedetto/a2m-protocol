@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(C:/Users/marco/Desktop/python-3.14.3-embed-amd64/Env/numel/Scripts/python.exe -c \":*)",
+      "Bash(C:/Users/marco/Desktop/python-3.14.3-embed-amd64/Env/numel/Scripts/python.exe examples/cross_framework_a2m.py)",
+      "Bash(\"C:\\\\Users\\\\marco\\\\Desktop\\\\python-3.14.3-embed-amd64\\\\Env\\\\numel\\\\Scripts\\\\python.exe\" examples/cross_framework_a2m.py)",
+      "Bash(\"C:\\\\Users\\\\marco\\\\Desktop\\\\python-3.14.3-embed-amd64\\\\Env\\\\numel\\\\Scripts\\\\python.exe\" tests/test_all_backends.py)",
+      "Bash(\"C:\\\\Users\\\\marco\\\\Desktop\\\\python-3.14.3-embed-amd64\\\\Env\\\\numel\\\\Scripts\\\\python.exe\" examples/agno_a2m_agent.py)",
+      "Bash(\"C:\\\\Users\\\\marco\\\\Desktop\\\\python-3.14.3-embed-amd64\\\\Env\\\\numel\\\\Scripts\\\\python.exe\" examples/langchain_a2m_agent.py)"
+    ]
+  }
+}

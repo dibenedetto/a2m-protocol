@@ -1,0 +1,25 @@
+[project]
+name            = "a2m-protocol"
+version         = "0.1.0"
+description     = "A2M — the Agent-to-Memory Protocol: specification, reference implementation and conformance suite."
+readme          = "README.md"
+license         = { text = "MIT" }
+requires-python = ">=3.11"
+
+# The protocol, the reference implementation and the conformance suite need
+# nothing but the standard library. That is a property worth keeping: a
+# dependency in this package would become a dependency of every implementer
+# who reads it as an example.
+dependencies    = []
+
+[project.optional-dependencies]
+# Vector indexing for the persistent sample store. Without it, a2m_store.py
+# falls back to cosine in Python.
+vector = ["sqlite-vec>=0.1.9"]
+# Local embeddings, used by the sample store and by bench_embeddings.py.
+embed  = ["ollama"]
+
+[project.urls]
+Homepage      = "https://a2m-protocol.org"
+Specification = "https://github.com/dibenedetto/a2m-protocol/blob/main/spec/a2m-0.1.md"
+Source        = "https://github.com/dibenedetto/a2m-protocol"

@@ -1,3 +1,15 @@
 __pycache__/
-.vscode/
-.claude/
+*.py[cod]
+.venv/
+.env
+
+# Sample-store artifacts
+*.db
+*.db-wal
+*.db-shm
+*.procedural/
+memories/
+demo-memories/
+
+# Claude Code: shared settings are committed, personal ones are not
+.claude/settings.local.json

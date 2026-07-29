@@ -1,0 +1,825 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://a2m-protocol.org/schema/a2m-0.1.schema.json",
+  "title": "Agent-to-Memory Protocol 0.1",
+  "description": "Machine-checkable definitions for every A2M 0.1 request and response. Params and results are defined separately from the JSON-RPC envelope so that a validator can check either a whole message or just a payload.",
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "description": "RFC 3339 in UTC with a Z suffix. Numeric epochs are not permitted.",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$",
+      "examples": [
+        "2026-07-28T10:15:30.123Z"
+      ]
+    },
+    "capability": {
+      "type": "string",
+      "enum": [
+        "core",
+        "tiers",
+        "salience",
+        "scopes",
+        "sessions",
+        "events"
+      ]
+    },
+    "record": {
+      "type": "object",
+      "description": "One remembered thing, as returned by the server.",
+      "required": [
+        "id",
+        "content",
+        "created_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Opaque. Clients must not parse it."
+        },
+        "content": {
+          "type": "string"
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "role": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "group": {
+          "type": "string"
+        },
+        "tier": {
+          "type": "string",
+          "description": "capability: tiers"
+        },
+        "salience": {
+          "type": "number",
+          "description": "capability: salience"
+        },
+        "accessed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "access_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "owner": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "capability: scopes"
+        },
+        "score": {
+          "type": "number",
+          "description": "Ranking only. Never comparable across servers or calls."
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "capability: sessions"
+        }
+      }
+    },
+    "recordInput": {
+      "type": "object",
+      "description": "A record as written by the client. Only content is required.",
+      "required": [
+        "content"
+      ],
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Supplying it makes the write idempotent."
+        },
+        "role": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "group": {
+          "type": "string"
+        },
+        "tier": {
+          "type": "string"
+        },
+        "salience": {
+          "type": "number"
+        },
+        "owner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "where": {
+      "type": "object",
+      "description": "Conjunction of equality tests against record fields, falling back to metadata keys. An array value means 'any of'.",
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "tierInfo": {
+      "type": "object",
+      "required": [
+        "name",
+        "count"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "working",
+            "episodic",
+            "semantic",
+            "procedural"
+          ]
+        },
+        "capacity": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0 means unbounded."
+        },
+        "spill_to": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "promote_to": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "promote_after": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "half_life": {
+          "type": "number",
+          "minimum": 0
+        },
+        "shared": {
+          "type": "boolean"
+        },
+        "per_session": {
+          "type": "boolean"
+        }
+      }
+    },
+    "describeParams": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "string",
+          "examples": [
+            "a2m/0.1"
+          ]
+        },
+        "owner": {
+          "type": "string"
+        }
+      }
+    },
+    "describeResult": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "name",
+        "capabilities",
+        "methods"
+      ],
+      "properties": {
+        "protocol": {
+          "type": "string",
+          "pattern": "^a2m/\\d+\\.\\d+$"
+        },
+        "name": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/capability"
+          },
+          "contains": {
+            "const": "core"
+          },
+          "uniqueItems": true
+        },
+        "methods": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "tiers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/tierInfo"
+          }
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "max_records_per_call": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_recall_limit": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_content_length": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
+      }
+    },
+    "rememberParams": {
+      "type": "object",
+      "required": [
+        "records"
+      ],
+      "properties": {
+        "records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/recordInput"
+          },
+          "minItems": 1
+        },
+        "owner": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string",
+          "description": "Default session for records that do not set one."
+        }
+      }
+    },
+    "rememberResult": {
+      "type": "object",
+      "required": [
+        "ids"
+      ],
+      "properties": {
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "recallParams": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        },
+        "tier": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "where": {
+          "$ref": "#/$defs/where"
+        },
+        "min_score": {
+          "type": "number"
+        },
+        "owner": {
+          "type": "string"
+        }
+      }
+    },
+    "recallResult": {
+      "type": "object",
+      "required": [
+        "records"
+      ],
+      "properties": {
+        "records": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record"
+          }
+        }
+      }
+    },
+    "timelineParams": {
+      "type": "object",
+      "properties": {
+        "tier": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "owner": {
+          "type": "string"
+        },
+        "where": {
+          "$ref": "#/$defs/where"
+        }
+      }
+    },
+    "timelineResult": {
+      "$ref": "#/$defs/recallResult"
+    },
+    "forgetParams": {
+      "type": "object",
+      "description": "At least one of ids, query, tier or where must be present.",
+      "anyOf": [
+        {
+          "required": [
+            "ids"
+          ]
+        },
+        {
+          "required": [
+            "query"
+          ]
+        },
+        {
+          "required": [
+            "tier"
+          ]
+        },
+        {
+          "required": [
+            "where"
+          ]
+        }
+      ],
+      "properties": {
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "query": {
+          "type": "string"
+        },
+        "tier": {
+          "type": "string"
+        },
+        "where": {
+          "$ref": "#/$defs/where"
+        },
+        "owner": {
+          "type": "string"
+        }
+      }
+    },
+    "forgetResult": {
+      "type": "object",
+      "required": [
+        "forgotten"
+      ],
+      "properties": {
+        "forgotten": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "promoteParams": {
+      "type": "object",
+      "required": [
+        "ids",
+        "tier"
+      ],
+      "properties": {
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tier": {
+          "type": "string"
+        },
+        "salience": {
+          "type": "number"
+        },
+        "owner": {
+          "type": "string"
+        }
+      }
+    },
+    "promoteResult": {
+      "type": "object",
+      "required": [
+        "promoted"
+      ],
+      "properties": {
+        "promoted": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "reinforceParams": {
+      "type": "object",
+      "required": [
+        "ids"
+      ],
+      "properties": {
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "amount": {
+          "type": "number"
+        },
+        "owner": {
+          "type": "string"
+        }
+      }
+    },
+    "reinforceResult": {
+      "type": "object",
+      "required": [
+        "reinforced"
+      ],
+      "properties": {
+        "reinforced": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "consolidateParams": {
+      "type": "object",
+      "maxProperties": 0
+    },
+    "consolidateResult": {
+      "type": "object",
+      "required": [
+        "counts"
+      ],
+      "properties": {
+        "moved": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "promoted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "dropped": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "summarized": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "code",
+        "message"
+      ],
+      "properties": {
+        "code": {
+          "type": "integer",
+          "description": "Standard JSON-RPC codes plus the A2M block in -32000..-32099.",
+          "oneOf": [
+            {
+              "enum": [
+                -32700,
+                -32600,
+                -32601,
+                -32602,
+                -32603
+              ]
+            },
+            {
+              "enum": [
+                -32001,
+                -32002,
+                -32003,
+                -32004,
+                -32005,
+                -32006,
+                -32007
+              ]
+            }
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "For humans. Clients must not parse it."
+        },
+        "data": {}
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "method"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": [
+            "string",
+            "number",
+            "null"
+          ]
+        },
+        "method": {
+          "type": "string",
+          "pattern": "^memory/"
+        },
+        "params": {
+          "type": "object"
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "required": [
+        "jsonrpc",
+        "id"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "result"
+          ]
+        },
+        {
+          "required": [
+            "error"
+          ]
+        }
+      ],
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": [
+            "string",
+            "number",
+            "null"
+          ]
+        },
+        "result": {},
+        "error": {
+          "$ref": "#/$defs/error"
+        }
+      }
+    },
+    "sessionListParams": {
+      "type": "object",
+      "properties": {
+        "owner": {
+          "type": "string"
+        }
+      }
+    },
+    "sessionListResult": {
+      "type": "object",
+      "required": [
+        "sessions"
+      ],
+      "properties": {
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "session",
+              "records"
+            ],
+            "properties": {
+              "session": {
+                "type": "string"
+              },
+              "records": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "tiers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer"
+                }
+              },
+              "opened_at": {
+                "$ref": "#/$defs/timestamp"
+              },
+              "touched_at": {
+                "$ref": "#/$defs/timestamp"
+              }
+            }
+          }
+        }
+      }
+    },
+    "sessionCloseParams": {
+      "type": "object",
+      "required": [
+        "session"
+      ],
+      "properties": {
+        "session": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner": {
+          "type": "string"
+        }
+      }
+    },
+    "sessionCloseResult": {
+      "type": "object",
+      "required": [
+        "closed",
+        "counts"
+      ],
+      "properties": {
+        "closed": {
+          "type": "string"
+        },
+        "flushed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  },
+  "methods": {
+    "memory/describe": {
+      "params": {
+        "$ref": "#/$defs/describeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/describeResult"
+      },
+      "capability": "core"
+    },
+    "memory/remember": {
+      "params": {
+        "$ref": "#/$defs/rememberParams"
+      },
+      "result": {
+        "$ref": "#/$defs/rememberResult"
+      },
+      "capability": "core"
+    },
+    "memory/recall": {
+      "params": {
+        "$ref": "#/$defs/recallParams"
+      },
+      "result": {
+        "$ref": "#/$defs/recallResult"
+      },
+      "capability": "core"
+    },
+    "memory/timeline": {
+      "params": {
+        "$ref": "#/$defs/timelineParams"
+      },
+      "result": {
+        "$ref": "#/$defs/timelineResult"
+      },
+      "capability": "core"
+    },
+    "memory/forget": {
+      "params": {
+        "$ref": "#/$defs/forgetParams"
+      },
+      "result": {
+        "$ref": "#/$defs/forgetResult"
+      },
+      "capability": "core"
+    },
+    "memory/promote": {
+      "params": {
+        "$ref": "#/$defs/promoteParams"
+      },
+      "result": {
+        "$ref": "#/$defs/promoteResult"
+      },
+      "capability": "tiers"
+    },
+    "memory/consolidate": {
+      "params": {
+        "$ref": "#/$defs/consolidateParams"
+      },
+      "result": {
+        "$ref": "#/$defs/consolidateResult"
+      },
+      "capability": "tiers"
+    },
+    "memory/reinforce": {
+      "params": {
+        "$ref": "#/$defs/reinforceParams"
+      },
+      "result": {
+        "$ref": "#/$defs/reinforceResult"
+      },
+      "capability": "salience"
+    },
+    "memory/session/list": {
+      "params": {
+        "$ref": "#/$defs/sessionListParams"
+      },
+      "result": {
+        "$ref": "#/$defs/sessionListResult"
+      },
+      "capability": "sessions"
+    },
+    "memory/session/close": {
+      "params": {
+        "$ref": "#/$defs/sessionCloseParams"
+      },
+      "result": {
+        "$ref": "#/$defs/sessionCloseResult"
+      },
+      "capability": "sessions"
+    }
+  }
+}

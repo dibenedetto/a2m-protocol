@@ -4,25 +4,13 @@
 
 [![Status](https://img.shields.io/badge/status-draft_v0.1-orange)](#status)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Spec](https://img.shields.io/badge/spec-HTML-green)](a2m-spec.html)
+[![Spec](https://img.shields.io/badge/spec-a2m--0.1-green)](spec/a2m-0.1.md)
 
 **LangChain**, **Agno**, **n8n**, **CrewAI**, **AutoGen** — each ships its own memory model. Agents from different frameworks cannot share state, history, or knowledge, even when running inside the same workflow.
 
-**A2M** is a thin, open protocol that lets any agent framework read and write to a shared memory store through a single REST interface — without modifying existing agents.
+**A2M** is a thin, open protocol that lets any agent framework read and write to a shared memory store through one interface — without modifying existing agents.
 
----
-
-## Contents
-
-- [The problem](#the-problem)
-- [How A2M works](#how-a2m-works)
-- [Memory model](#memory-model)
-- [Namespace addressing](#namespace-addressing)
-- [REST API at a glance](#rest-api-at-a-glance)
-- [Adapters](#adapters)
-- [Design decisions](#design-decisions)
-- [Status](#status)
-- [Contributing](#contributing)
+**Specification:** [spec/a2m-0.1.md](spec/a2m-0.1.md) · **Home:** <https://a2m-protocol.org>
 
 ---
 
@@ -38,235 +26,239 @@ LangChain agent     Agno agent      n8n node        CrewAI crew
   ✗ No shared state   ✗ Lost across runs   ✗ No cross-framework queries
 ```
 
-Each framework's memory is isolated, framework-specific, and incompatible with the others.
-
----
-
 ## How A2M works
 
 ```
 LangChain agent     Agno agent      n8n node        CrewAI crew
       │                   │               │                │
       ▼                   ▼               ▼                ▼
-  A2M adapter         A2M adapter     HTTP Request    A2M adapter
+  A2M client          A2M client      HTTP Request    A2M client
       │                   │               │                │
       └───────────────────┴───────────────┴────────────────┘
                                   │
-                          A2M REST API
+                     A2M — JSON-RPC 2.0, `memory/*`
+                     in-process · stdio · HTTP
                                   │
                     ┌─────────────┴──────────────┐
                     │                            │
              Relational store              Vector index
-          (SQLite / PostgreSQL)       (FAISS / pgvector / Chroma)
+          (SQLite / PostgreSQL)       (sqlite-vec / pgvector / …)
 
-  ✓ Shared state   ✓ Persistent across runs   ✓ Semantic search built-in
+  ✓ Shared state   ✓ Persistent across runs   ✓ Semantic search built in
 ```
 
-A2M defines:
+```python
+memory = connect_local(MemoryStack())               # in-process
+memory = connect_stdio([sys.executable, "a2m.py"])  # a child process
+memory = connect_http("http://127.0.0.1:8778/")     # over the network
 
-- a **wire format** (JSON over HTTP, REST baseline)
-- a **data model** (5 memory types, hierarchical namespaces, optional embeddings)
-- a **storage contract** (relational + vector backends)
-- a **4-method adapter interface** any framework implements
+memory.remember("the deploy key rotates every ninety days")
+memory.recall(query="how often does the key change?")
+```
+
+The transport changes; the client does not. Methods live under `memory/`, a
+namespace chosen so one endpoint can serve A2M alongside MCP's `tools/`,
+`resources/` and `prompts/`.
+
+---
+
+## Why it is shaped this way
+
+**A memory store is not a database.** Agents do not query memory, they *recall*
+from it: they hand over the situation they are in and expect back whatever is
+worth knowing, ranked. Ranking is the primitive, not filtering.
+
+**Most stores are not layered.** A vector database can write, search and delete
+in an afternoon and has no concept of tiers, consolidation or salience. A
+protocol demanding all of it would be implementable only by its own reference
+implementation. So A2M defines a small mandatory **core** any store can satisfy,
+and layers the rest into **capabilities** a server declares and a client checks.
+
+| Capability | Methods | Required |
+|---|---|---|
+| `core` | `describe` `remember` `recall` `timeline` `forget` | **yes** |
+| `tiers` | `promote` `consolidate` | no |
+| `salience` | `reinforce` | no |
+| `scopes` | *(adds `owner`)* | no |
+| `sessions` | `session/list` `session/close` | no |
+
+A call into an undeclared capability returns `-32003 CAPABILITY_NOT_SUPPORTED` —
+**not** `-32601`, which a client cannot distinguish from a typo.
 
 ---
 
 ## Memory model
 
-Every A2M entry has a `type` that determines its lifetime and indexing strategy.
+Every record has a `tier`, and every tier declares a `kind` that determines its
+lifetime and how it is read.
 
-| Type | Lifetime | Purpose |
-|---|---|---|
-| `working` | Session | In-flight scratchpad. Ephemeral task state. |
-| `episodic` | Long | Interaction history. Ordered log of events. |
-| `semantic` | Long | Facts and knowledge. Vector-indexed for similarity search. |
-| `procedural` | Long | Learned steps and heuristics. How to accomplish goals. |
-| `external` | Long | Pointer to an external resource — file, URL, blob. |
+| Kind | Holds | Read as | Bounded by |
+|---|---|---|---|
+| `working` | the live transcript | **replay**, chronological | capacity, **per conversation** |
+| `episodic` | what happened | **search**, relevance + filter | capacity |
+| `semantic` | what is true | **search**, relevance | unbounded |
+| `procedural` | how to do things | **search**, at task start | unbounded |
 
-A single entry looks like:
+Two different forces move a record, and keeping them apart is the point:
 
-```json
-{
-  "id":        "018f2a3b-…",
-  "key":       "user/goal",
-  "namespace": "myapp/wf-42/sess-abc/agent-0",
-  "type":      "semantic",
-  "value":     "Build a real-time translation pipeline",
-  "embedding": [0.12, -0.04, 0.87, "…"],
-  "meta": {
-    "source_framework": "langchain",
-    "created_at":       "2025-09-01T14:22:11Z",
-    "tags":             ["user", "goal"],
-    "confidence":       0.95
-  }
-}
+```
+working ──spill──▶ episodic ──spill──▶ semantic
+                       │
+                       └──promote──▶ semantic        procedural
+                         (recalled 3×)                ▲
+                                                      └── written deliberately
 ```
 
-> **Embeddings are caller-owned.** A2M stores and indexes them verbatim. The server never generates or replaces embeddings, keeping the protocol model-agnostic.
+**Spilling** is pressure: a tier is over capacity, so its weakest records are
+displaced. **Promotion** is reinforcement: a record recalled often enough has
+stopped being an episode and become a fact. Consolidation runs promotion
+*first*, so a record that keeps proving useful is never displaced by sheer
+volume of newer material.
+
+Nothing spills into `procedural`. A fact does not decay into a procedure.
+
+`working` is bounded **per conversation**, not per tier — otherwise two
+concurrent chats compete for the same slots and the busier one evicts the
+quieter one's context purely by talking more.
+
+Where each tier should actually be *stored*, and why `working` must never go in
+a vector database, is in [spec/implementing-a2m.md](spec/implementing-a2m.md).
 
 ---
 
-## Namespace addressing
+## What is in here
 
-Every entry is scoped to a slash-delimited namespace:
-
-```
-{app} / {workflow} / {session} / {agent}
-
-myapp/wf-42/sess-abc/agent-0    # single agent
-myapp/wf-42/sess-abc            # all agents in a session
-myapp/wf-42                     # all sessions in a workflow
-myapp                           # entire app
-```
-
-Callers set the namespace explicitly on every request. Trailing segments can be omitted to broaden scope. Reads with `recursive=true` traverse child namespaces.
-
----
-
-## REST API at a glance
-
-Base path: `/a2m/v1`
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/{namespace}/entries` | Write or upsert an entry |
-| `GET` | `/{namespace}/entries/{key}` | Read a single entry |
-| `GET` | `/{namespace}/entries` | List and filter entries |
-| `POST` | `/{namespace}/query` | Semantic search (caller provides embedding) |
-| `DELETE` | `/{namespace}/entries/{key}` | Delete an entry |
-| `WS` | `/{namespace}/subscribe` | Real-time event stream |
-
-**Write an entry:**
-
-```http
-POST /a2m/v1/myapp/wf-42/sess-abc/agent-0/entries
-Content-Type: application/json
-
-{
-  "key":       "user/goal",
-  "type":      "semantic",
-  "value":     "Build a real-time translation pipeline",
-  "embedding": [0.12, -0.04, 0.87],
-  "meta": { "tags": ["user", "goal"] }
-}
-```
-
-**Semantic query:**
-
-```http
-POST /a2m/v1/myapp/wf-42/query
-Content-Type: application/json
-
-{
-  "embedding": [0.11, -0.03, 0.89],
-  "type":      "semantic",
-  "top_k":     5
-}
-```
-
-All writes are **upserts** keyed on `(namespace, key)`. Retries are safe.
-
----
-
-## Adapters
-
-A framework adapter implements four methods and delegates to the A2M HTTP API. No changes to existing agents are needed.
-
-```python
-class A2MAdapter(ABC):
-
-    def write(self, key, type, value, embedding=None, meta={}) -> dict: ...
-    def read(self, key) -> dict | None: ...
-    def query(self, embedding, type=None, top_k=5) -> list[dict]: ...
-    def delete(self, key) -> None: ...
-```
-
-**LangChain** (example):
-
-```python
-from langchain.memory import BaseMemory
-from a2m import A2MClient
-
-class A2MMemory(BaseMemory):
-    client: A2MClient
-    namespace: str
-
-    def save_context(self, inputs, outputs):
-        self.client.write(
-            self.namespace,
-            key="chat_history",
-            type="episodic",
-            value={"in": inputs, "out": outputs}
-        )
-
-    def load_memory_variables(self, inputs):
-        results = self.client.query(
-            self.namespace,
-            embedding=embed(str(inputs)),  # caller embeds
-            top_k=5
-        )
-        return {"history": [r["entry"]["value"] for r in results]}
-```
-
-**n8n** requires no adapter code — use the HTTP Request node pointing at `/a2m/v1/…`.
-
-### Adapter status
-
-| Framework | Status |
+| | |
 |---|---|
-| LangChain | In progress |
-| Agno | In progress |
-| n8n | Ready (HTTP Request node) |
-| CrewAI | Planned |
-| AutoGen | Planned |
+| [spec/a2m-0.1.md](spec/a2m-0.1.md) | **the normative specification** |
+| [spec/implementing-a2m.md](spec/implementing-a2m.md) | what each tier means, and where it should live |
+| [spec/schema/](spec/schema/) | JSON Schema for every request, response and record |
+| [a2m.py](a2m.py) | reference server and client, all capabilities |
+| [a2m_minimal.py](a2m_minimal.py) | independent `core`-only server, standard library only |
+| [a2m_conformance.py](a2m_conformance.py) | conformance suite for **any** A2M server |
+| [a2m_store.py](a2m_store.py) | persistent sample: one SQLite file, one store per tier |
+| [a2m_router.py](a2m_router.py) | federated sample: one process per tier, one router |
+| [memory.py](memory.py) · [retrieval.py](retrieval.py) · [text.py](text.py) · [jsonrpc.py](jsonrpc.py) | the reference stack |
+| [test_a2m.py](test_a2m.py) | `python test_a2m.py` — no test runner, no network |
+| [bench_embeddings.py](bench_embeddings.py) | which embedding model backs recall, measured |
+| [DECISIONS.md](DECISIONS.md) | why the non-obvious choices are what they are |
+
+The protocol, the reference implementation and the conformance suite need
+**nothing but the standard library**. `sqlite-vec` and `ollama` are optional and
+used only by the sample store and the benchmark.
 
 ---
 
-## Design decisions
+## Conformance
 
-| Decision | Choice | Rationale |
-|---|---|---|
-| Embedding ownership | Caller-provided | Keeps A2M model-agnostic; embedding quality varies by domain |
-| Namespace resolution | Explicit (caller sets it) | No auth context needed; simpler, auditable |
-| Backend | Relational **+** vector (both required) | SQL for exact lookup and TTL; vector index for semantic search |
-| Write conflict policy | Upsert (last-write-wins on key) | Idempotent writes; safe retries |
+[a2m_conformance.py](a2m_conformance.py) speaks only the protocol — it never
+imports the server under test, so a Rust or TypeScript implementation is tested
+exactly as a Python one is.
+
+```
+python a2m_conformance.py --stdio python a2m.py
+python a2m_conformance.py --stdio python a2m_minimal.py
+python a2m_conformance.py --http  http://127.0.0.1:8778/
+```
+
+Checks are grouped by capability and skipped when undeclared. Declaring a
+capability and then not honouring it *is* a failure — a client trusts
+`describe`, so a server lying there breaks clients in ways no defensive coding
+on their side can fix.
+
+Four implementations ship, sharing no storage code, and the same unmodified
+suite passes against all of them:
+
+| | storage | declares | conformance |
+|---|---|---|---|
+| [a2m.py](a2m.py) | a dict in memory | everything | 51/51 |
+| [a2m_minimal.py](a2m_minimal.py) | a dict, stdlib only | `core` only | 32/32 |
+| [a2m_store.py](a2m_store.py) | SQLite, one store per tier | everything | 51/51 |
+| [a2m_router.py](a2m_router.py) | four A2M servers | everything | 51/51 |
+
+[a2m_minimal.py](a2m_minimal.py) imports **nothing from this repository**. It
+exists to answer a question the reference implementation cannot: *is the
+specification enough on its own?* An implementation sharing code with the
+reference proves only that the reference agrees with itself. Writing it found a
+real bug — `a2m.py` was rejecting unrecognised parameters, breaking the
+forward-compatibility rule that lets a newer client talk to an older server.
+
+---
+
+## Two things to know before implementing
+
+**`owner` is not a security boundary.** The `scopes` capability partitions data;
+it does not control access. A client asserts its own `owner`, and nothing in the
+protocol stops it asserting a different one. On a local transport that is fine.
+Over a network a server **must** derive the scope from the authenticated
+principal and ignore what the client claimed — spec §6.
+
+**`score` is ranking information only.** Never comparable between servers,
+between calls, or against a fixed threshold. Different scorers occupy entirely
+different ranges, and a model rating everything `0.9` may discriminate worse
+than one spreading across `0..1` — spec §5.3.
+
+---
+
+## Running it
+
+```
+python test_a2m.py                          # 171 checks, offline
+python demo_a2m_stack.py                    # the whole stack, on disk
+python demo_a2m_stack.py --router           # same, federated across processes
+python a2m_store.py memory.db               # a persistent server on stdio
+python a2m_router.py memories/ --http 8778  # federated, over HTTP
+```
 
 ---
 
 ## Status
 
-**Draft v0.1** — the wire format and data model are stable enough for adapter development and feedback. Not yet recommended for production use.
+Draft `a2m/0.1`. Pre-1.0, so compatibility requires an exact minor match and any
+minor version may introduce breaking changes.
 
-The spec is hosted as a self-contained HTML document:
+### History, and what is still open
 
-- [**`a2m-spec.html`**](a2m-spec.html) — full technical specification (data model, API, backend requirements, adapter contract, versioning)
-- [**`a2m-protocol.html`**](a2m-protocol.html) — partner-facing overview
+This repository was reset on 2026-07-28 to carry A2M 0.1. The earlier REST draft
+is **not gone** — it remains in this repository's history at commit
+[`7ca383c`](../../commit/7ca383c), recoverable with `git checkout 7ca383c`.
+
+| | draft | 0.1 |
+|---|---|---|
+| wire format | REST over HTTP | JSON-RPC 2.0 — in-process, stdio, HTTP |
+| memory kinds | working, episodic, semantic, procedural, **external** | the first four |
+| addressing | hierarchical namespaces, recursive reads | `owner` + `session` |
+| identity | caller-set `key`, upsert by key | server-assigned opaque `id` |
+| embeddings | **caller-owned**, stored verbatim | server-side, pluggable scorer |
+| events | `WS /subscribe` | `events` capability, JSON-RPC notifications |
+| conformance | — | executable suite, four passing implementations |
+
+The four memory kinds survived unchanged, having been arrived at twice
+independently — which is the strongest evidence in this repository that they are
+the right four.
+
+Four ideas from the draft are **deliberately still open** rather than rejected,
+and are the leading candidates for 0.2:
+
+- **`external` records** — a record that points at a file, URL or blob rather
+  than holding text. 0.1 has no way to express one.
+- **Caller-owned embeddings.** The draft's rule — *the server stores and indexes
+  vectors verbatim and never generates or replaces them* — keeps the protocol
+  model-agnostic, which matters precisely for the cross-framework case A2M
+  exists to serve. 0.1 embeds server-side.
+- **Addressable keys and upsert.** A caller-set `key` such as `user/city` makes a
+  record *updatable by meaning*. That is a better answer to superseded facts than
+  either option [implementing-a2m.md §4](spec/implementing-a2m.md) currently
+  offers: `"the user lives in Bologna"` becomes wrong when they move, and an
+  upsert on `user/city` fixes it without a delete-then-write race.
+- **Hierarchical namespaces.** `owner` and `session` cover two levels of what the
+  draft's `{app}/{workflow}/{session}/{agent}` covered in four, and nothing in
+  0.1 does recursive scope reads.
 
 ---
 
-## Contributing
+## Licence
 
-A2M is an open initiative. We are looking for:
+MIT. See [LICENSE](LICENSE) and spec §11.
 
-- **Framework maintainers** to co-design the adapter interface for their framework
-- **Infrastructure partners** to validate the storage contract against real backends
-- **Early adopters** to implement and test the protocol against real workloads
-
-Open an issue to start a conversation, or reach out directly at **marco.dibenedetto@isti.cnr.it**.
-
-### Implementing a conformant store
-
-A conformant A2M Memory Store must:
-
-1. Expose the REST API at `/a2m/v1/`
-2. Support all 6 endpoints (write, read, list, query, delete, subscribe)
-3. Provide a **relational backend** (SQLite or PostgreSQL) for key lookup, metadata filtering, and TTL
-4. Provide a **vector backend** (FAISS, pgvector, Chroma, or Weaviate) for semantic search
-5. Implement upsert semantics preserving `id` and `created_at`
-6. Never generate or replace caller-provided embeddings
-
----
-
-## License
-
-MIT — see [LICENSE](LICENSE).
+A protocol that is expensive to implement does not get implemented.
