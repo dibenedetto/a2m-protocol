@@ -3,6 +3,11 @@ __pycache__/
 .venv/
 .env
 
+# The project has no runtime dependencies, so the lock file only ever pins the
+# optional extras. Committing it would list ollama, httpx and pydantic in a
+# repository whose point is that it needs none of them.
+uv.lock
+
 # Sample-store artifacts
 *.db
 *.db-wal

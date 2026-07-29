@@ -4,7 +4,7 @@ version         = "0.1.0"
 description     = "A2M — the Agent-to-Memory Protocol: specification, reference implementation and conformance suite."
 readme          = "README.md"
 license         = { text = "MIT" }
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 
 # The protocol, the reference implementation and the conformance suite need
 # nothing but the standard library. That is a property worth keeping: a
