@@ -7,7 +7,7 @@
 # =============================================================================
 set -euo pipefail
 
-UV_PYTHON="3.14"
+UV_PYTHON="3.10"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 1. Ensure uv is available

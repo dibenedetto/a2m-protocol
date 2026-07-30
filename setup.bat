@@ -7,7 +7,7 @@ setlocal EnableDelayedExpansion
 :: Usage:  setup.bat [app arguments...]
 :: =============================================================================
 
-set UV_PYTHON=3.14
+set UV_PYTHON=3.10
 set SCRIPT_DIR=%~dp0
 
 :: 1. Ensure uv is available
