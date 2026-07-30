@@ -204,6 +204,9 @@ shares memory underneath. See DECISION 027.
 | [tools/test_a2m.py](tools/test_a2m.py) | `python -m tools.test_a2m` — no test runner, no network |
 | [tools/bench_embeddings.py](tools/bench_embeddings.py) | which embedding model backs recall, measured |
 | [examples/cross_framework.py](examples/cross_framework.py) | both frameworks sharing one store, as a runnable script |
+| [examples/embedders.py](examples/embedders.py) | choosing what ranks recall: lexical, embeddings, hybrid, caller-owned |
+| [examples/rag_ingest.py](examples/rag_ingest.py) | loading a corpus: chunks, re-ingestion that replaces, a corpus tier |
+| [examples/procedural.py](examples/procedural.py) | skills as procedural memory, and why nothing spills into it |
 | [examples/n8n_workflow.json](examples/n8n_workflow.json) | n8n against an A2M server — stock HTTP nodes, no custom node |
 | [DECISIONS.md](DECISIONS.md) | why the non-obvious choices are what they are |
 

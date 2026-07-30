@@ -44,6 +44,9 @@ tools/demo_stack.py        both topologies, end to end
 tools/bench_embeddings.py  which embedding model, measured
 
 examples/cross_framework.py  both frameworks, one store, 6/6
+examples/embedders.py        the scorer seam and the embed seam, offline, 11/11
+examples/rag_ingest.py       corpus ingestion: group, keys, external, 16/16
+examples/procedural.py       skills in, promotion in, nothing spilled in, 14/14
 examples/n8n_workflow.json   n8n over stock HTTP nodes, importable
 ```
 
