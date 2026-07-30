@@ -34,6 +34,13 @@ def main(argv: list[str] = None) -> int:
 	"""
 	argv = sys.argv[1:] if argv is None else argv
 
+	# Without this, `a2m --help` starts a server and blocks on stdin, which is
+	# an unhelpful answer to a question about usage -- and the installed console
+	# script makes that the first thing anyone tries.
+	if "--help" in argv or "-h" in argv:
+		print(__doc__)
+		return 0
+
 	if "--http" in argv:
 		index = argv.index("--http")
 		port  = int(argv[index + 1]) if len(argv) > index + 1 else 8778

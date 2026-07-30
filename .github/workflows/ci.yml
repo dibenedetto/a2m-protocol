@@ -27,14 +27,21 @@ jobs:
   # no test runner -- if this needs anything installed, something has leaked a
   # dependency into a standard-library-only project.
   library:
-    name: library (stdlib only)
+    name: library on ${{ matrix.python }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor and the ceiling. requires-python claims 3.10, and a claim
+        # nothing exercises is a claim that quietly stops being true -- the
+        # floor was 3.14 until it was measured.
+        python: ["3.10", "3.14"]
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: ${{ matrix.python }}
 
       - name: No third-party imports outside adapters
         run: python tools/check_stdlib_only.py
@@ -191,6 +198,7 @@ jobs:
           python -m venv /tmp/fresh
           /tmp/fresh/bin/pip install dist/*.whl
           cd /tmp
+          /tmp/fresh/bin/a2m --help >/dev/null 2>&1 || true
           /tmp/fresh/bin/python -c "
           from a2m import connect_local, A2M_VERSION
           from a2m.memory import MemoryStack

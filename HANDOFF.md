@@ -128,6 +128,31 @@ and a wheel verified in a clean venv; two latent bugs were fixed (a duplicated
 `timeline` definition in `protocol.py`, and `examples/cross_framework.py`
 importing a pre-restructure path).
 
+## 5b. Open findings — read before the freeze review
+
+Two things found by measurement on 2026-07-30, neither fixed, both deliberately
+left for Marco because both are decisions rather than maintenance.
+
+**The read-only conformance gap.** DECISION 001 claims an existing RAG stack can
+be exposed over A2M by implementing `describe` and `recall` and returning
+`-32004 READ_ONLY` from `remember`. A server built exactly that way was run
+against the suite: it dies with `FATAL the server did not answer
+memory/describe`, which blames the wrong method. A read-only server is currently
+unconformant and untestable while being advertised as the on-ramp for every
+existing RAG stack. Options and a recommendation are in
+[promotion/RELEASE.md](promotion/RELEASE.md) §1.
+
+**`requires-python` was `>=3.14`, which excluded almost everyone.** Measured
+across 3.9–3.14: the full suite and every conformance target pass on **3.10**
+and up; 3.9 fails on PEP 604 unions evaluated at runtime. Now `>=3.10`, with CI
+running both the floor and the ceiling so it cannot silently rise again. Worth
+knowing because the same mistake — an interpreter requirement nobody measured —
+is easy to reintroduce.
+
+Also outstanding, minor: `SqliteMemoryStack` exposes no `close()` while
+`PgMemoryStack` does, so on Windows an open handle blocks removing a temp
+directory. Two examples work around it with `ignore_cleanup_errors=True`.
+
 ## 6. The promotion plan
 
 Agreed with Marco on 2026-07-30. The organizing principle: **you get one launch,
@@ -140,62 +165,79 @@ MCP and A2A — is currently unoccupied, but Mem0 (61K+ stars), Zep and Letta ar
 all products that could publish an "open memory protocol" any quarter and win on
 installed base alone. Weeks, not months.
 
+**Status as of 2026-07-30: everything buildable is built, on branch
+`launch-prep`.** What is left is the outward-facing half, which is Marco's by
+definition — see §7. Internal materials live in [promotion/](promotion/) and,
+like this file, should be deleted or moved before the repository is public.
+
 ### Phase 0 — become launchable (gates everything else)
 
-- [ ] Commit and tag `v0.1.0`.
+- [x] Committed on `launch-prep`. **Not** tagged — tagging waits for the freeze
+      review, since a tag is the closest thing to an announcement the repository
+      has.
 - [ ] **Freeze review of the wire format.** Marco's call, and irreversible.
-- [ ] CI: GitHub Actions running tests plus every conformance target (Postgres
-      via a service container, TS via Node) on push. For a project whose
-      credibility *is* "94/94 across six implementations", the badge is the
-      claim, re-proven publicly.
-- [ ] a2m-protocol.org: static site — rendered spec, 60-second quickstart,
-      conformance table, DECISIONS. Every file references this domain; a 404
-      there undoes the polish everywhere else.
-- [ ] Publish to PyPI so `pip install a2m-protocol` works in the launch post's
-      first code block. **Needs Marco's credentials.**
+      Checklist and the open read-only question: [promotion/RELEASE.md](promotion/RELEASE.md).
+- [x] CI: `.github/workflows/ci.yml` runs the library on the floor and the
+      ceiling interpreter, every conformance target (Postgres via a service
+      container, TypeScript via Node), the HTTP binding, the examples, both
+      demos, and a wheel install from outside the repository. Counts are
+      asserted, not just exit codes.
+- [x] `tools/check_stdlib_only.py` walks every import and fails CI on a stray
+      dependency. Verified by injecting a violation.
+- [x] a2m-protocol.org: `www/`, hand-written HTML plus a standard-library
+      renderer that builds the spec, the guide and the decision log out of the
+      repository. `.github/workflows/pages.yml` deploys it. **Needs Marco:**
+      repository Pages settings and the DNS records.
+- [x] Packaging: classifiers, keywords, an `a2m` console script, and
+      `requires-python` corrected from `>=3.14` to a measured `>=3.10`.
+- [ ] Publish to PyPI. **Needs Marco's credentials.** Checklist in
+      [promotion/RELEASE.md](promotion/RELEASE.md) §3–4; reserve the name before
+      the launch post, since a `pip install` that 404s is the one unrecoverable
+      launch mistake.
 
 ### Phase 1 — the launch (one shot)
 
-- [ ] Demo recording (asciinema or GIF): Claude Code remembers through
-      `bridge_mcp` → a LangChain script recalls it → an n8n workflow reads the
-      same store. Under two minutes. `tools/demo_stack.py` and
-      `examples/cross_framework.py` are the raw material.
-- [ ] The post: problem (five frameworks, five silos) → small-core argument
-      (RAG is the degenerate case) → "why not MCP tools" → demo.
-- [ ] Venues, same week: Show HN, r/LocalLLaMA, r/LangChain, lobste.rs, X.
-      Cross-post to the W3C CG list the same day.
+- [x] Shot list written: [promotion/demo.md](promotion/demo.md) — exact
+      commands, timings, what to cut if it runs long, and which two shots must
+      never be cut. **Needs Marco:** the recording itself.
+- [x] Post drafted in four registers (Show HN, Reddit, X thread, CG list),
+      with prepared answers for the questions that will certainly be asked:
+      [promotion/launch-post.md](promotion/launch-post.md).
+- [ ] **Needs Marco:** posting, and being at the keyboard for the three hours
+      after. On Show HN, replying fast matters more than the post.
 
 ### Phase 2 — standing
 
-- [ ] Join the **W3C AI Agent Memory Interoperability Community Group**
-      (<https://www.w3.org/community/ai-agent-memory-interop/>), chartered
-      2026-07-16. Its scope — encrypted memory cells, post-quantum signatures,
-      GDPR erasure — is *custody and portability*, orthogonal to A2M's *runtime
-      recall*. Position A2M as complementary and offer a crosswalk. It has no
-      artifacts yet; being early is how A2M becomes what the eventual report
-      cites.
-- [ ] List `bridge_mcp` in the MCP servers registry and awesome-mcp-servers
-      under "memory".
+- [x] W3C CG introduction drafted: [promotion/w3c-cg-note.md](promotion/w3c-cg-note.md).
+      Framed as a contribution to their charter work, not an announcement —
+      their scope is custody and portability, A2M's is runtime access, and the
+      note offers a crosswalk rather than asking for adoption. **Needs Marco:**
+      joining the group and sending it.
+- [x] MCP registry entry and every other directory submission drafted:
+      [promotion/directory-submissions.md](promotion/directory-submissions.md).
+      **Needs Marco:** sending them, no more than two a day.
 - [ ] Optional: a short arXiv report (design, conformance methodology, the
       four-kind model). The interop-protocol surveys have an empty memory slot.
 
 ### Phase 3 — adoption loops
 
-- [ ] Submit into each framework's own directory: LangChain integrations docs,
-      n8n template gallery (the workflow JSON is submission-ready), CrewAI and
-      Agno community listings, AutoGen ecosystem docs.
-- [ ] Make the conformance suite the contributor funnel: a page saying "write a
-      server in your language, run one command, send a PR adding your row",
-      plus seeded good-first-issues (Go minimal server, Redis store, Rust core).
-- [ ] Build one façade over an incumbent — a read-only A2M server over Mem0 OSS
-      (`describe` + `recall`, `-32004` from `remember`). Demonstrates "A2M is the
-      interface, products compete underneath" without asking permission.
+- [x] Framework directory submissions drafted, with the rules that stop them
+      reading as spam: [promotion/directory-submissions.md](promotion/directory-submissions.md).
+- [x] Contributor funnel: [CONTRIBUTING.md](CONTRIBUTING.md) leads with "write a
+      server in your language", names the five rules every implementation gets
+      wrong, and ends at a PR adding a row to the conformance table. Seven issue
+      bodies ready to create in [promotion/seeded-issues.md](promotion/seeded-issues.md).
+- [ ] **Blocked, deliberately:** the read-only façade over an incumbent. It
+      cannot be built honestly until the read-only conformance gap in §5b is
+      resolved — shipping a façade that crashes the conformance suite would
+      demonstrate the opposite of the intended point.
 
 ### Phase 4 — cadence
 
-DECISIONS.md is a pre-written blog series ("Why scores never compare", "Why the
-server never fetches your URI", "Shipping events without server-initiated
-requests"). One post every week or two, each ending at the spec.
+- [x] Seven posts outlined from DECISIONS, each shaped as "a bug you recognise"
+      rather than "a protocol you have not heard of":
+      [promotion/blog-series.md](promotion/blog-series.md). Includes the two
+      posts *not* to write and why.
 
 **Metrics that matter**: external implementations passing conformance, adapter
 downloads, inbound issues from strangers. Stars are noise. The first conformance

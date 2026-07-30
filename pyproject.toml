@@ -4,13 +4,41 @@ version         = "0.1.0"
 description     = "A2M — the Agent-to-Memory Protocol: specification, reference implementation and conformance suite."
 readme          = "README.md"
 license         = { text = "MIT" }
-requires-python = ">=3.14"
+authors         = [{ name = "Marco Di Benedetto" }]
+keywords        = ["agent", "memory", "protocol", "jsonrpc", "mcp", "llm", "rag", "interoperability"]
+
+# Measured, not guessed: the full suite and every conformance target pass on
+# 3.10 through 3.14. 3.9 fails on PEP 604 unions evaluated at runtime, which is
+# the actual floor. Requiring a newer interpreter than the code needs is an
+# adoption tax paid for nothing, and CI runs the floor on every push so it
+# cannot quietly rise again.
+requires-python = ">=3.10"
 
 # The protocol, the reference implementation and the conformance suite need
 # nothing but the standard library. That is a property worth keeping: a
 # dependency in this package would become a dependency of every implementer
-# who reads it as an example.
+# who reads it as an example. tools/check_stdlib_only.py enforces it.
 dependencies    = []
+
+classifiers = [
+	"Development Status :: 4 - Beta",
+	"Intended Audience :: Developers",
+	"License :: OSI Approved :: MIT License",
+	"Programming Language :: Python :: 3",
+	"Programming Language :: Python :: 3.10",
+	"Programming Language :: Python :: 3.11",
+	"Programming Language :: Python :: 3.12",
+	"Programming Language :: Python :: 3.13",
+	"Programming Language :: Python :: 3.14",
+	"Topic :: Software Development :: Libraries :: Application Frameworks",
+	"Topic :: Scientific/Engineering :: Artificial Intelligence",
+	"Typing :: Typed",
+]
+
+# `a2m` runs the reference server, so a fresh install can be pointed at by an
+# MCP client or a conformance run without knowing the module path.
+[project.scripts]
+a2m = "a2m.__main__:main"
 
 [project.optional-dependencies]
 # Vector indexing for the reference store. Without it, implementations/store_sqlite.py falls back
