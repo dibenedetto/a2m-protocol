@@ -2,6 +2,7 @@
 
 > A shared memory protocol for AI agents across frameworks.
 
+[![CI](https://github.com/dibenedetto/a2m-protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/dibenedetto/a2m-protocol/actions/workflows/ci.yml)
 [![Status](https://img.shields.io/badge/status-draft_v0.1-orange)](#status)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Spec](https://img.shields.io/badge/spec-a2m--0.1-green)](spec/a2m-0.1.md)

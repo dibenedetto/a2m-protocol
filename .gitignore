@@ -21,3 +21,7 @@ demo-memories/
 
 # Claude Code: shared settings are committed, personal ones are not
 .claude/settings.local.json
+
+# Rendered site. Built by www/render.py and published by the pages workflow;
+# committing it would let a published page drift from the Markdown it came from.
+www/public/

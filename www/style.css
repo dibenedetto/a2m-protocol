@@ -1,0 +1,272 @@
+/* A2M — one stylesheet, no framework, no build step.
+   Light and dark both first-class: the reader's system preference decides. */
+
+:root {
+	--bg        : #fdfdfc;
+	--surface   : #f4f4f1;
+	--text      : #1c1c1a;
+	--muted     : #6b6b64;
+	--rule      : #e0e0da;
+	--accent    : #8a4b2a;
+	--accent-bg : #f6ede6;
+	--code-bg   : #f4f4f1;
+	--measure   : 46rem;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg        : #14140f;
+		--surface   : #1e1e1a;
+		--text      : #e8e6df;
+		--muted     : #9a978c;
+		--rule      : #33322c;
+		--accent    : #e0a077;
+		--accent-bg : #2a201a;
+		--code-bg   : #1a1a16;
+	}
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+	margin           : 0;
+	background       : var(--bg);
+	color            : var(--text);
+	font-family      : ui-serif, Georgia, "Iowan Old Style", "Times New Roman", serif;
+	font-size        : 1.0625rem;
+	line-height      : 1.65;
+	overflow-wrap    : break-word;
+}
+
+/* ---------------------------------------------------------------- chrome */
+
+header {
+	display          : flex;
+	flex-wrap        : wrap;
+	gap              : 0.5rem 1.5rem;
+	align-items      : baseline;
+	justify-content  : space-between;
+	max-width        : var(--measure);
+	margin           : 0 auto;
+	padding          : 1.5rem 1.25rem 1rem;
+	border-bottom    : 1px solid var(--rule);
+}
+
+.wordmark {
+	font-family      : ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+	font-size        : 1.25rem;
+	font-weight      : 700;
+	letter-spacing   : 0.06em;
+	color            : var(--text);
+	text-decoration  : none;
+}
+
+header nav {
+	display          : flex;
+	flex-wrap        : wrap;
+	gap              : 0 1rem;
+	font-family      : ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+	font-size        : 0.8125rem;
+}
+
+header nav a {
+	color            : var(--muted);
+	text-decoration  : none;
+	padding-bottom   : 0.15rem;
+	border-bottom    : 2px solid transparent;
+}
+
+header nav a:hover  { color: var(--text); }
+header nav a.here   { color: var(--text); border-bottom-color: var(--accent); }
+
+main {
+	max-width        : var(--measure);
+	margin           : 0 auto;
+	padding          : 2rem 1.25rem 4rem;
+}
+
+footer {
+	max-width        : var(--measure);
+	margin           : 0 auto;
+	padding          : 2rem 1.25rem 3rem;
+	border-top       : 1px solid var(--rule);
+	font-size        : 0.875rem;
+	color            : var(--muted);
+}
+
+footer p { margin: 0.35rem 0; }
+
+/* ------------------------------------------------------------- typography */
+
+h1, h2, h3, h4, h5, h6 {
+	line-height      : 1.25;
+	font-weight      : 650;
+	margin           : 2.25rem 0 0.75rem;
+	letter-spacing   : -0.011em;
+}
+
+h1 { font-size: 2.125rem; margin-top: 0.5rem; letter-spacing: -0.02em; }
+h2 { font-size: 1.5rem;  padding-top: 0.75rem; border-top: 1px solid var(--rule); }
+h3 { font-size: 1.1875rem; }
+h4, h5, h6 { font-size: 1.0625rem; }
+
+/* The specification opens with an h1 and then h2s; a rule above the very first
+   one would sit immediately under the page title. */
+main > h2:first-of-type { border-top: none; padding-top: 0; }
+
+p, ul, ol, blockquote, pre, .scroll { margin: 0 0 1.05rem; }
+
+a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 0.15em; }
+a:hover { text-decoration-thickness: 2px; }
+
+strong { font-weight: 650; }
+
+.muted { color: var(--muted); }
+
+/* An unobtrusive per-heading anchor, revealed on hover. */
+.anchor {
+	float            : left;
+	width            : 1.1rem;
+	margin-left      : -1.1rem;
+	color            : var(--rule);
+	text-decoration  : none;
+	opacity          : 0;
+	font-weight      : 400;
+}
+
+h1:hover .anchor, h2:hover .anchor, h3:hover .anchor,
+h4:hover .anchor, h5:hover .anchor, h6:hover .anchor { opacity: 1; }
+
+blockquote {
+	margin           : 1.25rem 0;
+	padding          : 0.6rem 1rem;
+	background       : var(--accent-bg);
+	border-left      : 3px solid var(--accent);
+	border-radius    : 0 4px 4px 0;
+}
+
+blockquote p:last-child { margin-bottom: 0; }
+
+hr { border: none; border-top: 1px solid var(--rule); margin: 2.5rem 0; }
+
+li { margin: 0.3rem 0; }
+
+/* -------------------------------------------------------------- code */
+
+code, kbd, pre {
+	font-family      : ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+	font-size        : 0.875em;
+}
+
+code {
+	background       : var(--code-bg);
+	padding          : 0.1em 0.35em;
+	border-radius    : 3px;
+	border           : 1px solid var(--rule);
+}
+
+pre {
+	background       : var(--code-bg);
+	border           : 1px solid var(--rule);
+	border-radius    : 6px;
+	padding          : 0.9rem 1rem;
+	overflow-x       : auto;
+	line-height      : 1.5;
+}
+
+pre code {
+	background       : none;
+	border           : none;
+	padding          : 0;
+	font-size        : 0.8125rem;
+	white-space      : pre;
+}
+
+/* ------------------------------------------------------------- tables */
+
+/* Wide content scrolls inside its own box; the page never scrolls sideways. */
+.scroll { overflow-x: auto; }
+
+table {
+	border-collapse  : collapse;
+	width            : 100%;
+	font-size        : 0.9375rem;
+	font-family      : system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+th, td {
+	text-align       : left;
+	padding          : 0.5rem 0.7rem;
+	border-bottom    : 1px solid var(--rule);
+	vertical-align   : top;
+}
+
+th {
+	font-weight      : 600;
+	font-size        : 0.8125rem;
+	text-transform   : uppercase;
+	letter-spacing   : 0.04em;
+	color            : var(--muted);
+	border-bottom    : 2px solid var(--rule);
+	white-space      : nowrap;
+}
+
+tbody tr:hover { background: var(--surface); }
+
+/* ---------------------------------------------------------- home page */
+
+.hero { padding: 1rem 0 0.5rem; }
+
+.hero h1 { font-size: 2.5rem; }
+
+.lead {
+	font-size        : 1.1875rem;
+	line-height      : 1.55;
+	color            : var(--text);
+}
+
+.badges { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 1.25rem; }
+
+.badge {
+	font-family      : ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+	font-size        : 0.75rem;
+	padding          : 0.2rem 0.55rem;
+	border           : 1px solid var(--rule);
+	border-radius    : 999px;
+	background       : var(--surface);
+	color            : var(--muted);
+}
+
+.badge strong { color: var(--text); font-weight: 600; }
+
+section { margin-bottom: 1rem; }
+
+.cta { text-align: center; padding-top: 1rem; }
+.cta h2 { border-top: none; }
+
+.button {
+	display          : inline-block;
+	margin           : 0.3rem;
+	padding          : 0.55rem 1.15rem;
+	border-radius    : 6px;
+	background       : var(--accent);
+	color            : var(--bg);
+	font-family      : system-ui, -apple-system, "Segoe UI", sans-serif;
+	font-size        : 0.9375rem;
+	font-weight      : 600;
+	text-decoration  : none;
+	border           : 1px solid var(--accent);
+}
+
+.button:hover { opacity: 0.9; }
+
+.button.secondary { background: transparent; color: var(--accent); }
+
+@media (max-width: 34rem) {
+	body     { font-size: 1rem; }
+	.hero h1 { font-size: 1.875rem; }
+	.lead    { font-size: 1.0625rem; }
+	header   { padding-top: 1rem; }
+}

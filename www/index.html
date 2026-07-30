@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A2M — the Agent-to-Memory Protocol</title>
+<meta name="description" content="An open protocol that lets agents from any framework share one memory store. JSON-RPC 2.0, in-process, stdio or HTTP. Standard library only.">
+<meta property="og:title" content="A2M — the Agent-to-Memory Protocol">
+<meta property="og:description" content="LangChain, Agno, n8n, CrewAI and AutoGen each ship their own memory model. A2M is one interface they can all read and write through.">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#129504;</text></svg>">
+</head>
+<body>
+<header>
+<a class="wordmark" href="index.html">A2M</a>
+<nav>
+<a href="index.html" class="here">Home</a>
+<a href="spec.html">Specification</a>
+<a href="implementing.html">Implementing</a>
+<a href="decisions.html">Decisions</a>
+<a href="https://github.com/dibenedetto/a2m-protocol">GitHub</a>
+</nav>
+</header>
+
+<main>
+
+<section class="hero">
+<h1>A memory an agent does not own</h1>
+<p class="lead">
+A2M puts a memory store behind the same kind of boundary MCP puts a tool behind,
+so an agent can talk to a Python object in its own process, a subprocess, or a
+hosted service — without any of its own code changing.
+</p>
+<p class="badges">
+<span class="badge">draft <strong>a2m/0.1</strong></span>
+<span class="badge">JSON-RPC 2.0</span>
+<span class="badge">MIT</span>
+<span class="badge">standard library only</span>
+</p>
+</section>
+
+<section>
+<h2>The problem</h2>
+<p>
+<strong>LangChain</strong>, <strong>Agno</strong>, <strong>n8n</strong>,
+<strong>CrewAI</strong> and <strong>AutoGen</strong> each ship their own memory
+model. Agents from different frameworks cannot share state, history or
+knowledge — even when they are running inside the same workflow.
+</p>
+<div class="scroll">
+<pre><code>LangChain agent     Agno agent      n8n node        CrewAI crew
+[BufferMemory]      [AgentMemory]   [$json ctx]     [EntityMemory]
+      │                   │               │                │
+  in-process          PostgreSQL      workflow ctx      ChromaDB
+
+  ✗ no shared state   ✗ lost across runs   ✗ no cross-framework recall</code></pre>
+</div>
+</section>
+
+<section>
+<h2>Sixty seconds</h2>
+<pre><code class="language-bash">pip install a2m-protocol</code></pre>
+<pre><code class="language-python">from a2m import connect_local, connect_stdio, connect_http
+from a2m.memory import MemoryStack
+
+memory = connect_local(MemoryStack())              # in-process
+memory = connect_stdio(["python", "-m", "a2m"])    # a child process
+memory = connect_http("http://127.0.0.1:8778/")    # over the network
+
+memory.remember("the deploy key rotates every ninety days")
+memory.recall(query="how often does the key change?")</code></pre>
+<p>
+The transport changes; the client does not. Methods live under
+<code>memory/</code>, a namespace chosen so one endpoint can serve A2M alongside
+MCP's <code>tools/</code>, <code>resources/</code> and <code>prompts/</code>.
+</p>
+</section>
+
+<section>
+<h2>A small core, and capabilities on top</h2>
+<p>
+A vector database can write, search and delete in an afternoon, and has no
+concept of tiers, consolidation or salience. A protocol demanding all of it
+would be implementable only by its own reference implementation. So A2M defines
+a small mandatory <strong>core</strong> that any store can satisfy, and layers
+the rest into <strong>capabilities</strong> a server declares and a client
+checks.
+</p>
+<div class="scroll">
+<table>
+<thead><tr><th>Capability</th><th>Methods</th><th>Required</th></tr></thead>
+<tbody>
+<tr><td><code>core</code></td><td><code>describe</code> <code>remember</code> <code>recall</code> <code>timeline</code> <code>forget</code></td><td><strong>yes</strong></td></tr>
+<tr><td><code>tiers</code></td><td><code>promote</code> <code>consolidate</code></td><td>no</td></tr>
+<tr><td><code>salience</code></td><td><code>reinforce</code></td><td>no</td></tr>
+<tr><td><code>scopes</code></td><td><em>adds</em> <code>owner</code></td><td>no</td></tr>
+<tr><td><code>sessions</code></td><td><code>session/list</code> <code>session/close</code></td><td>no</td></tr>
+<tr><td><code>keys</code></td><td><code>fetch</code> — addressable, upsert</td><td>no</td></tr>
+<tr><td><code>embeddings</code></td><td><em>adds</em> <code>embedding</code> — caller-owned, verbatim</td><td>no</td></tr>
+<tr><td><code>external</code></td><td><em>adds</em> <code>uri</code> — points at a file or blob</td><td>no</td></tr>
+<tr><td><code>events</code></td><td><code>events</code> <code>events/subscribe</code> <code>events/unsubscribe</code></td><td>no</td></tr>
+</tbody>
+</table>
+</div>
+<p>
+Classic <strong>RAG is the degenerate case</strong>: one tier, read-only,
+<code>recall</code> only. An existing RAG stack can be exposed over A2M in an
+afternoon — implement <code>describe</code> and <code>recall</code>, return
+<code>-32004 READ_ONLY</code> from <code>remember</code> — and every A2M client
+works against it.
+</p>
+</section>
+
+<section>
+<h2>Why not just an MCP tool server?</h2>
+<p>
+It is the right first question. A2M deliberately shares MCP's plumbing —
+JSON-RPC 2.0, the same stdio framing, one POST endpoint, no batches, no
+server-initiated requests — so the two compose rather than compete. What A2M
+refuses is putting the <em>store</em> behind <code>tools/call</code>, because a
+tool result is text for a model to read, and a memory store's consumers are
+mostly not models.
+</p>
+<ul>
+<li><strong>Records stay typed.</strong> Metadata round-trips byte-for-byte, ids
+are opaque, timestamps are RFC 3339, a caller's embedding is stored verbatim —
+rules a conformance suite can check on a wire format and can only hope for in a
+tool description.</li>
+<li><strong>Negotiation stays checkable.</strong> <code>describe</code> declares
+capabilities and an undeclared one answers <code>-32003</code>. Tool lists are
+per-server vocabulary: two memory MCP servers already disagree on tool names,
+which is the silo rebuilt one layer up.</li>
+<li><strong>The memory semantics survive.</strong> Replay versus search —
+<code>timeline</code> versus <code>recall</code> — is a distinction frameworks
+build on. Flattened into tools it survives only as a sentence a model may or may
+not read.</li>
+</ul>
+<p>
+And the relationship is runnable: the bundled bridge is a dependency-free MCP
+server whose tools are <em>any</em> A2M store, with the tool list derived from
+what that store declares.
+</p>
+<pre><code class="language-bash">python -m implementations.bridge_mcp --stdio python -m implementations.store_sqlite memory.db</code></pre>
+<p class="muted">
+MCP is how a <em>model</em> reaches capabilities. A2M is how <em>agent
+infrastructure</em> shares memory underneath.
+</p>
+</section>
+
+<section>
+<h2>Four kinds of memory</h2>
+<div class="scroll">
+<table>
+<thead><tr><th>Kind</th><th>Holds</th><th>Read as</th><th>Bounded by</th></tr></thead>
+<tbody>
+<tr><td><code>working</code></td><td>the live transcript</td><td><strong>replay</strong>, chronological</td><td>capacity, <strong>per conversation</strong></td></tr>
+<tr><td><code>episodic</code></td><td>what happened</td><td><strong>search</strong>, relevance + filter</td><td>capacity</td></tr>
+<tr><td><code>semantic</code></td><td>what is true</td><td><strong>search</strong>, relevance</td><td>unbounded</td></tr>
+<tr><td><code>procedural</code></td><td>how to do things</td><td><strong>search</strong>, at task start</td><td>unbounded</td></tr>
+</tbody>
+</table>
+</div>
+<pre><code>working ──spill──▶ episodic ──spill──▶ semantic
+                       │
+                       └──promote──▶ semantic        procedural
+                         (recalled 3×)                ▲
+                                                      └── written deliberately</code></pre>
+<p>
+Two different forces move a record, and keeping them apart is the point.
+<strong>Spilling</strong> is pressure: a tier is over capacity, so its weakest
+records are displaced. <strong>Promotion</strong> is reinforcement: a record
+recalled often enough has stopped being an episode and become a fact.
+Consolidation runs promotion <em>first</em>, so a record that keeps proving
+useful is never displaced by sheer volume of newer material.
+</p>
+<p>
+Nothing spills into <code>procedural</code>. A fact does not decay into a
+procedure.
+</p>
+</section>
+
+<section>
+<h2>Six implementations, one suite</h2>
+<p>
+The conformance suite speaks only the protocol — it never imports the server it
+tests, so an implementation in another language is checked exactly as a Python
+one is. Declaring a capability and then not honouring it <em>is</em> a failure:
+a client trusts <code>describe</code>, so a server lying there breaks clients in
+ways no defensive coding on their side can fix.
+</p>
+<div class="scroll">
+<table>
+<thead><tr><th></th><th>storage</th><th>declares</th><th>conformance</th></tr></thead>
+<tbody>
+<tr><td><code>python -m a2m</code></td><td>a dict in memory</td><td>everything</td><td>94/94</td></tr>
+<tr><td><code>server_minimal.py</code></td><td>a dict, stdlib only</td><td><code>core</code></td><td>36/36</td></tr>
+<tr><td><code>server_minimal.ts</code></td><td>a Map, <strong>TypeScript</strong></td><td><code>core</code> + <code>keys</code></td><td>46/46</td></tr>
+<tr><td><code>store_sqlite.py</code></td><td>SQLite + sqlite-vec</td><td>everything</td><td>94/94</td></tr>
+<tr><td><code>store_postgres.py</code></td><td><strong>PostgreSQL + pgvector</strong></td><td>everything</td><td>94/94</td></tr>
+<tr><td><code>server_federated.py</code></td><td>four A2M servers</td><td>everything</td><td>94/94</td></tr>
+</tbody>
+</table>
+</div>
+<pre><code class="language-bash">python -m tools.conformance --stdio python -m a2m
+python -m tools.conformance --stdio node --experimental-strip-types implementations/server_minimal.ts</code></pre>
+<p>
+<code>server_minimal.py</code> imports <strong>nothing from the
+repository</strong>. It exists to answer a question the reference implementation
+cannot: <em>is the specification enough on its own?</em> Writing it found a real
+bug — the reference was rejecting unrecognised parameters, breaking the
+forward-compatibility rule that lets a newer client talk to an older server.
+</p>
+</section>
+
+<section>
+<h2>Two things to know before implementing</h2>
+<p>
+<strong><code>owner</code> is not a security boundary.</strong> The
+<code>scopes</code> capability partitions data; it does not control access. A
+client asserts its own <code>owner</code> and nothing in the protocol stops it
+asserting a different one. On a local transport that is fine. Over a network a
+server <strong>must</strong> derive the scope from the authenticated principal
+and ignore what the client claimed.
+</p>
+<p>
+<strong><code>score</code> is ranking information only.</strong> Never
+comparable between servers, between calls, or against a fixed threshold.
+Different scorers occupy entirely different ranges, and a model rating
+everything <code>0.9</code> may discriminate worse than one spreading across
+<code>0..1</code>.
+</p>
+</section>
+
+<section class="cta">
+<h2>Start here</h2>
+<p>
+<a class="button" href="spec.html">Read the specification</a>
+<a class="button secondary" href="https://github.com/dibenedetto/a2m-protocol">Browse the source</a>
+</p>
+<p class="muted">
+Implementing A2M? Copy
+<a href="https://github.com/dibenedetto/a2m-protocol/blob/main/implementations/server_minimal.py">server_minimal.py</a>
+— a whole server in 470 lines, written from the specification alone — then run
+the conformance suite against it.
+</p>
+</section>
+
+</main>
+
+<footer>
+<p>A2M — the Agent-to-Memory Protocol. MIT licensed.
+<a href="https://github.com/dibenedetto/a2m-protocol">Source</a> ·
+<a href="spec.html">Specification</a></p>
+<p class="muted">A protocol that is expensive to implement does not get implemented.</p>
+</footer>
+</body>
+</html>

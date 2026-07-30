@@ -1,0 +1,65 @@
+# Build and publish a2m-protocol.org.
+#
+# The site renders the specification, the implementation guide and the decision
+# log straight out of the repository, so a published page cannot drift from the
+# document it came from. Nothing is generated ahead of time and committed: the
+# only source of truth is the Markdown.
+#
+# One-time setup, in the repository settings: Pages -> Source -> GitHub Actions.
+# For the custom domain, set Pages -> Custom domain to a2m-protocol.org and add
+# a CNAME file below, plus the DNS records GitHub asks for.
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "www/**"
+      - "spec/**"
+      - "DECISIONS.md"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and never cancel one halfway: an interrupted
+# publish can leave the live site on a partial build.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Render
+        run: python www/render.py
+
+      # The renderer needs nothing installed, which is the same promise the
+      # rest of the repository makes. If this step ever needs a pip install,
+      # the site has acquired a build system and the claim is no longer true.
+      - name: Custom domain
+        run: echo "a2m-protocol.org" > www/public/CNAME
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: www/public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

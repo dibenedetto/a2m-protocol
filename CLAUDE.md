@@ -42,6 +42,11 @@ tools/conformance.py       conformance suite. Speaks only the protocol.
 tools/test_a2m.py          implementation tests
 tools/demo_stack.py        both topologies, end to end
 tools/bench_embeddings.py  which embedding model, measured
+tools/check_stdlib_only.py walks every import; CI fails on a stray dependency
+
+www/render.py              renders spec + DECISIONS to www/public/. Stdlib only.
+www/index.html             the landing page, hand-written
+.github/workflows/ci.yml   every conformance target, on every push
 
 examples/cross_framework.py  both frameworks, one store, 6/6
 examples/embedders.py        the scorer seam and the embed seam, offline, 11/11
@@ -68,6 +73,7 @@ imported a server could only confirm the server agrees with itself.
 Everything runs from the repository root.
 
 ```bash
+python -m tools.check_stdlib_only     # no dependency crept in anywhere
 python -m tools.test_a2m              # 232 checks, offline, no test runner
 python -m doctest a2m/memory.py a2m/text.py a2m/retrieval.py a2m/jsonrpc.py a2m/protocol.py  # examples are real
 python -m tools.conformance --stdio python -m a2m                            # 94/94

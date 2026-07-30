@@ -1,0 +1,202 @@
+# A2M continuous integration.
+#
+# The claim this repository makes is that one unmodified conformance suite
+# passes against implementations sharing no storage code -- two engines, two
+# languages, two topologies. That claim is only worth anything if it is
+# re-proven on every push, against every target, rather than asserted in a
+# README. So this workflow runs all of them, and a target that is skipped is a
+# target that failed.
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  # The library, its doctests and its offline suite. No network, no database,
+  # no test runner -- if this needs anything installed, something has leaked a
+  # dependency into a standard-library-only project.
+  library:
+    name: library (stdlib only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: No third-party imports outside adapters
+        run: python tools/check_stdlib_only.py
+
+      - name: Offline suite
+        run: python -m tools.test_a2m
+
+      - name: Docstring examples are true
+        run: python -m doctest a2m/memory.py a2m/text.py a2m/retrieval.py a2m/jsonrpc.py a2m/protocol.py
+
+      - name: Examples
+        run: |
+          python -m examples.embedders
+          python -m examples.rag_ingest
+          python -m examples.procedural
+
+      - name: Both demo topologies
+        run: |
+          python -m tools.demo_stack
+          python -m tools.demo_stack --router
+
+  # Every target that needs nothing but Python or Node. The counts are asserted
+  # rather than eyeballed: a suite that silently starts skipping a capability
+  # would otherwise still exit 0.
+  conformance:
+    name: conformance ${{ matrix.target.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: reference
+            command: python -m a2m
+            expect: 94
+          - name: minimal-python
+            command: python implementations/server_minimal.py
+            expect: 36
+          - name: minimal-typescript
+            command: node --experimental-strip-types implementations/server_minimal.ts
+            expect: 46
+          - name: sqlite
+            command: python -m implementations.store_sqlite ci.db
+            expect: 94
+          - name: federated
+            command: python -m implementations.server_federated ci-memories/
+            expect: 94
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - uses: actions/setup-node@v4
+        if: contains(matrix.target.command, 'node')
+        with:
+          node-version: "22"
+
+      - name: ${{ matrix.target.command }}
+        run: |
+          python -m tools.conformance --stdio ${{ matrix.target.command }} | tee report.txt
+          grep -q "${{ matrix.target.expect }}/${{ matrix.target.expect }} checks passed" report.txt \
+            || { echo "::error::expected ${{ matrix.target.expect }} checks"; exit 1; }
+
+  # The HTTP binding reaches checks stdio cannot: Origin, the version header,
+  # 405 on GET, the well-known profile -- and that push is honestly refused on a
+  # transport that cannot carry a notification back.
+  http:
+    name: conformance over http
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Serve, then check
+        run: |
+          python -m a2m --http 8778 &
+          for _ in $(seq 1 30); do
+            python -c "import socket,sys; sys.exit(0 if socket.socket().connect_ex(('127.0.0.1',8778))==0 else 1)" && break
+            sleep 1
+          done
+          python -m tools.conformance --http http://127.0.0.1:8778/ | tee report.txt
+          grep -q "94/94 checks passed" report.txt || { echo "::error::expected 94 checks"; exit 1; }
+
+  # Both PostgreSQL targets. They exist to catch tier logic that leaked into a
+  # storage engine: store.py holds the tier model and contains no SQL, and the
+  # only way to keep that true is to run it on an engine the reference never
+  # touches.
+  postgres:
+    name: conformance ${{ matrix.target.name }}
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: a2m
+          POSTGRES_PASSWORD: a2m
+          POSTGRES_DB: a2m
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U a2m"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: postgres
+            command: python -m implementations.store_postgres postgresql://a2m:a2m@127.0.0.1:5432/a2m
+          - name: federated-on-postgres
+            command: python -m implementations.server_federated postgresql://a2m:a2m@127.0.0.1:5432/a2mfed --backend postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install the optional driver
+        run: pip install "psycopg[binary]>=3.1"
+
+      # The federation points four backends at one database, which must exist
+      # before any of them starts.
+      - name: Create the federated database
+        run: PGPASSWORD=a2m psql -h 127.0.0.1 -U a2m -d a2m -c "CREATE DATABASE a2mfed" || true
+
+      - name: ${{ matrix.target.command }}
+        run: |
+          python -m tools.conformance --stdio ${{ matrix.target.command }} | tee report.txt
+          grep -q "94/94 checks passed" report.txt || { echo "::error::expected 94 checks"; exit 1; }
+
+  # The package an implementer actually installs. Building it is not enough --
+  # what matters is that it imports and works from a directory that is not the
+  # repository, which is where a missing module or a stray relative path shows.
+  package:
+    name: wheel installs and runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Build
+        run: pip install build && python -m build
+
+      - name: Install the wheel somewhere else entirely
+        run: |
+          python -m venv /tmp/fresh
+          /tmp/fresh/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/fresh/bin/python -c "
+          from a2m import connect_local, A2M_VERSION
+          from a2m.memory import MemoryStack
+          memory = connect_local(MemoryStack())
+          memory.remember('installed from the wheel', tier='semantic')
+          assert memory.recall(query='wheel')[0]['content'] == 'installed from the wheel'
+          assert memory.events()['cursor']
+          print('wheel OK', A2M_VERSION)
+          "
