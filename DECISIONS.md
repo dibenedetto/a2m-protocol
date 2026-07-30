@@ -427,7 +427,7 @@ matched MCP's clause for clause, which is the strongest evidence that conforming
 costs nothing here.
 
 **Batching, and how the spec was already wrong.** §8.3 said the HTTP body could
-be "an array for a batch". `a2m_minimal.py` had never implemented it — it
+be "an array for a batch". `server_minimal.py` had never implemented it — it
 rejects any non-object with `-32600` — so the specification had a clause one of
 its four conformant implementations did not honour, and the conformance suite
 never noticed because it had no way to *send* a batch through the client
@@ -473,7 +473,7 @@ possibly stale by construction — a client that needs the truth calls
 
 ## 022 — A second language, and no build step
 
-**Decision.** [a2m_minimal.ts](a2m_minimal.ts) ports the minimal server to
+**Decision.** [implementations/server_minimal.ts](implementations/server_minimal.ts) ports the minimal server to
 TypeScript, run directly by `node --experimental-strip-types`. No `package.json`,
 no `tsconfig.json`, no dependencies, no compiled output.
 
@@ -481,7 +481,7 @@ no `tsconfig.json`, no dependencies, no compiled output.
 were assertions. Five implementations in one language demonstrate that Python
 agrees with itself; the conformance suite already speaks only the protocol, so
 validating a non-Python server cost nothing but the server. It now passes the
-same unmodified suite, 34/34, exactly as `a2m_minimal.py` does.
+same unmodified suite, 34/34, exactly as `server_minimal.py` does.
 
 **Why no build step.** A TypeScript project with a compile stage would have made
 this the first thing in the repository that has to be *built* before it can be
@@ -503,7 +503,7 @@ Neither is exotic. Both are the kind of thing a specification is *for*, and
 neither would have surfaced without leaving the reference language.
 
 **Consequence.** The most useful demonstration in the repository is now a pair:
-`a2m_client.py` against `a2m_minimal.ts` is a Python client and a TypeScript
+`client.py` against `server_minimal.ts` is a Python client and a TypeScript
 server sharing no code, neither written against the other.
 
 ---
@@ -552,12 +552,12 @@ real frameworks meet on top of it.
 
 ## 024 — A second engine, and the seam it proved was not real yet
 
-**Decision.** [a2m_postgres.py](a2m_postgres.py) serves the same tier model on
+**Decision.** [implementations/store_postgres.py](implementations/store_postgres.py) serves the same tier model on
 PostgreSQL and pgvector, reusing `TieredMemoryStack` unchanged. To make that
-possible, `a2m_store.py` was split: `TieredMemoryStack` holds every tier decision
+possible, `store_sqlite.py` was split: `TieredMemoryStack` holds every tier decision
 and touches no SQL, `SqliteMemoryStack` holds the SQLite wiring.
 
-**Why a second engine.** `a2m_store.py`'s docstring claimed that "swapping
+**Why a second engine.** `store_sqlite.py`'s docstring claimed that "swapping
 DurableStore for Postgres means implementing that class, not rewriting the
 server". That was an assertion. One backend proves a store works; two prove the
 *seam* does, and the seam is what the file exists to demonstrate.
@@ -603,3 +603,74 @@ it describes. A server reachable over a network has no such disk to share, so th
 PostgreSQL store keeps the text in the row. The tier's *meaning* is identical —
 written deliberately, never spilled into (006) — and that is the part the
 protocol constrains. Storage is where implementations are supposed to differ.
+
+---
+
+## 025 — Three directories, and the leak the split exposed
+
+**Context.** Every file sat at the repository root with an `a2m_` prefix that had
+stopped carrying information: `a2m.py` was a library, `a2m_minimal.py` a server,
+`a2m_client.py` a client and `a2m_conformance.py` a test suite, all wearing the
+same badge. Worse, `a2m_store.py` and `a2m_postgres.py` read as peers when the
+first held the tier logic the second imported.
+
+**Decision.** Three directories, named for what the files *do* rather than what
+project they belong to:
+
+	a2m/              the library an implementation is built out of
+	implementations/  the specification implemented more than once
+	tools/            what judges the implementations, rather than being one
+
+and within `implementations/`, names that say which layer is the interesting one:
+`server_minimal.py` and `server_federated.py` are servers whose storage is
+incidental (a dict, four other servers); `store_sqlite.py` and
+`store_postgres.py` are storage whose server is forty lines of `main`.
+
+`tools/conformance.py` imports `a2m.jsonrpc` and nothing else, which the layout
+now makes visible: a suite that imported anything from `implementations/` could
+only confirm that a server agrees with itself.
+
+**What the split found.** `a2m_store.py` was split at the seam it always claimed
+to have, into `store.py` (tier logic, no SQL) and `store_sqlite.py` (storage).
+Making the boundary a file boundary immediately exposed three things that had
+crossed it silently:
+
+- **`TieredMemoryStack` tested `isinstance(store, DurableStore)`** to decide what
+  to embed. `PgDurableStore` subclasses `PgTierStore`, not `DurableStore`, so the
+  test was false for every PostgreSQL tier and the Postgres store had **never**
+  embedded anything on write. It is now `TierStore.EMBEDS`, a property a store
+  declares — because a backend is under no obligation to subclass anything of
+  ours. This is the same mistake as 018 in a different costume: an implementation
+  detail deciding something the tier model was supposed to decide.
+- **`TierStore.__init__` was typed `db: sqlite3.Connection`** in the class both
+  engines derive from.
+- **`TierStore.visible()` returned SQLite's `:owner` placeholder** from the base
+  class. PostgreSQL overrode it with `%(owner)s`; SQLite now overrides it too,
+  from a `SqliteTierStore` that mirrors `PgTierStore`, and the base returns
+  nothing because a module with no dialect in it cannot pick one.
+
+Two implementations sharing a base class is not what proves the seam is real.
+Two implementations sharing a base class *that neither can quietly reach around*
+is.
+
+**Why `server_minimal.py` inherits from nothing.** The obvious next move is a
+common base class for servers, and it is wrong for exactly one of them.
+`server_minimal.py` exists to answer whether the specification is enough on its
+own; a version that inherits our dispatcher wiring answers a different and much
+weaker question. It imports nothing from this repository and must stay that way,
+even at the cost of duplicating twenty lines.
+
+**Why `-m`.** Anything importing `a2m` runs as a module from the repository root.
+`server_minimal.py`, `server_minimal.ts` and `client.py` import nothing, so they
+still run as plain files from anywhere — the invocation is itself the claim.
+
+**A federation may now choose its engine.** `spawn_backends` grew
+`--backend sqlite|postgres`, and `spawn_backend` starts one tier at a time,
+because a federation has no reason to be homogeneous: working memory turns over
+constantly and is never searched, semantic memory is small and ranked hard, and
+putting them on different engines is a deployment decision the router cannot see.
+Pointing four backends at one PostgreSQL database surfaced a second real bug —
+`CREATE TABLE IF NOT EXISTS` is not atomic against a concurrent creator, and two
+backends building the shared `durable` table collided on its sequence. Schema
+creation now holds an advisory lock, which fixes it for any startup order rather
+than only for the one the router happens to use.

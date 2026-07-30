@@ -4,10 +4,10 @@ import time
 import uuid
 
 
-from   typing    import Any, Callable
+from   typing        import Any, Callable
 
 
-from   retrieval import LexicalScorer, Scorer
+from   a2m.retrieval import LexicalScorer, Scorer
 
 
 WEIGHTS = {"lexical": 0.60, "recency": 0.25, "salience": 0.15}
@@ -1174,7 +1174,7 @@ class MemoryStack:
 
 		A method rather than len(stack.records) so that a server can sit on a store
 		with no dict to measure -- which is exactly what
-		a2m_store.SqliteMemoryStack does.
+		store_sqlite.SqliteMemoryStack does.
 
 		Args:
 			agent (str, optional): Scope the count.

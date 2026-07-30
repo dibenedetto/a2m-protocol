@@ -26,11 +26,11 @@ import sys
 import time
 
 
-from   typing    import Callable
+from   typing        import Callable
 
 
-from   memory    import MemoryStack
-from   retrieval import EMBEDDING_MODEL, cosine, ollama_embedder
+from   a2m.memory    import MemoryStack
+from   a2m.retrieval import EMBEDDING_MODEL, cosine, ollama_embedder
 
 
 LANGUAGES = ["en", "it", "ru", "zh", "de"]

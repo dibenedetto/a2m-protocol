@@ -7,8 +7,8 @@ engineering advice about the four `kind` values, for people building a server.
 None of it is binding.
 
 Two working implementations of everything below ship with this repository:
-[a2m_store.py](../a2m_store.py) puts each tier in the store this document argues
-for, and [a2m_router.py](../a2m_router.py) federates the same stack across one
+[implementations/store_sqlite.py](../implementations/store_sqlite.py) puts each tier in the store this document argues
+for, and [implementations/server_federated.py](../implementations/server_federated.py) federates the same stack across one
 process per tier. Both pass the conformance suite unchanged.
 
 ---
@@ -270,7 +270,7 @@ class PostgresDurableStore(TierStore):  # episodic: filter *then* rank
 class GitProceduralStore(TierStore):    # procedural: diffable, revertible
 ```
 
-This is the seam [a2m_store.py](../a2m_store.py) exists to demonstrate, and the
+This is the seam [implementations/store_sqlite.py](../implementations/store_sqlite.py) exists to demonstrate, and the
 one the matrix in §1 is really about. Each tier owns its own table and its own
 idea of what reading means.
 

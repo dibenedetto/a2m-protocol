@@ -340,7 +340,7 @@ class StdioTransport(Transport):
 
 		Args:
 			command (list[str]): The command to run, e.g.
-				[sys.executable, "a2m_store.py", "memory.db"].
+				[sys.executable, "-m", "implementations.store_sqlite", "memory.db"].
 			env (dict, optional): Child environment. Inherits when omitted.
 			cwd (str, optional): Child working directory.
 			on_stderr (Callable, optional): Called with each stderr line, stripped.

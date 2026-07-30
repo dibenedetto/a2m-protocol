@@ -159,9 +159,9 @@ class A2MChatMessageHistory(BaseChatMessageHistory):
 	"""LangChain chat history stored in A2M's working tier.
 
 	Example:
-		import a2m_client
+		from implementations import client as a2m_client
 
-		client  = a2m_client.connect_stdio(["python", "a2m_store.py", "memory.db"])
+		client  = a2m_client.connect_stdio(["python", "-m", "implementations.store_sqlite", "memory.db"])
 		history = A2MChatMessageHistory(client, session="chat-1")
 
 		history.add_user_message("where does marco live?")

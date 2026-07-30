@@ -1,23 +1,23 @@
-"""A persistent A2M server on PostgreSQL, with pgvector for search.
+"""A persistent A2M store on PostgreSQL, with pgvector for search.
 
-	python a2m_postgres.py postgresql://a2m:a2m@127.0.0.1:55432/a2m
-	python a2m_postgres.py postgresql://... --http 8778
-	python a2m_postgres.py postgresql://... --tier working   # one tier of a federation
+	python -m implementations.store_postgres postgresql://a2m:a2m@127.0.0.1:55432/a2m
+	python -m implementations.store_postgres postgresql://... --http 8778
+	python -m implementations.store_postgres postgresql://... --tier working
 
 	pip install "psycopg[binary]"        # and a server with CREATE EXTENSION vector
 
-This exists to test a claim [a2m_store.py](a2m_store.py) makes in its own
-docstring: that swapping a tier's storage means implementing `TierStore`, not
-rewriting the server. It reuses `TieredMemoryStack` **unchanged** — every rule
-about spilling, promotion, sessions and blending relevance with recency and
-salience is the same object — and replaces only what touches rows.
+This exists to test a claim [store.py](store.py) makes in its own docstring: that
+swapping a tier's storage means implementing `TierStore`, not rewriting the
+server. It imports `TieredMemoryStack` **unchanged** — every rule about spilling,
+promotion, sessions and blending relevance with recency and salience is the same
+object — and replaces only what touches rows.
 
 What the port cost, precisely:
 
 	three TierStore subclasses      SQL dialect and the vector index
 	one TieredMemoryStack subclass  opening a connection, building the stores
 
-and nothing else. Not one line of tier logic, and nothing at all in a2m.py, which
+and nothing else. Not one line of tier logic, and nothing at all in a2m/protocol.py, which
 does not know either engine exists.
 
 The differences worth naming, because they are where a port like this usually
@@ -58,9 +58,14 @@ import psycopg
 from   psycopg.rows import dict_row
 
 
-from   a2m       import A2M_VERSION, MemoryServer, serve_a2m_http, serve_stdio
-from   a2m_store import COLUMNS, TieredMemoryStack, TierStore, pack, to_record, unpack
-from   memory    import KINDS, MemoryRecord, MemoryTier, default_tiers
+from   a2m                   import A2M_VERSION, MemoryServer, serve_a2m_http, serve_stdio
+from   a2m.memory            import MemoryRecord, MemoryTier
+from   implementations.store import TierStore, TieredMemoryStack, pack, single_tier, unpack
+
+
+# Serialises schema creation between backends sharing one database. Any constant
+# works as long as every A2M store agrees on it; this one is "a2m" in hex.
+SCHEMA_LOCK = 0x61326D
 
 
 # The same columns as the SQLite store, in PostgreSQL's types. `id` is UNIQUE
@@ -284,8 +289,9 @@ class PgDurableStore(PgTierStore):
 	SQLite store does it: they differ in what writes them and how long they live,
 	not in how they are read."""
 
-	TABLE = "durable"
-	SCOPE = "tier = %(tier)s"
+	EMBEDS = True
+	TABLE  = "durable"
+	SCOPE  = "tier = %(tier)s"
 
 	def __init__(self, db, tier: MemoryTier) -> None:
 		"""Bind this store to a connection and its tier.
@@ -541,7 +547,7 @@ class PgProceduralStore(PgTierStore):
 
 
 class PostgresMemoryStack(TieredMemoryStack):
-	"""The tier logic of a2m_store.py, stored in PostgreSQL.
+	"""The tier logic of store_sqlite.py, stored in PostgreSQL.
 
 	Every method that decides anything -- remember, recall, consolidate, promote,
 	sessions -- is inherited unchanged. Only the storage differs, which is the
@@ -584,18 +590,30 @@ class PostgresMemoryStack(TieredMemoryStack):
 		self.dsn = dsn
 		self.db  = psycopg.connect(dsn, autocommit=False, row_factory=dict_row)
 
-		for tier in self.tiers.values():
-			if tier.kind == "working":
-				store = PgWorkingStore(self.db, tier)
-			elif tier.kind == "procedural":
-				store = PgProceduralStore(self.db, tier)
-			else:
-				store = PgDurableStore(self.db, tier)
+		# A federation gives every tier its own process and points them all at one
+		# database (server_federated.py, --backend postgres), so four of them can
+		# reach CREATE TABLE in the same instant. IF NOT EXISTS does not make DDL
+		# atomic against a concurrent creator: two backends building the shared
+		# `durable` table collide on its sequence and one of them dies. Holding an
+		# advisory lock across schema creation makes startup order irrelevant --
+		# including when something other than the router starts the processes.
+		self.db.execute("SELECT pg_advisory_lock(%s)", (SCHEMA_LOCK,))
+		try:
+			for tier in self.tiers.values():
+				if tier.kind == "working":
+					store = PgWorkingStore(self.db, tier)
+				elif tier.kind == "procedural":
+					store = PgProceduralStore(self.db, tier)
+				else:
+					store = PgDurableStore(self.db, tier)
 
-			store.create()
-			self.stores[tier.name] = store
+				store.create()
+				self.stores[tier.name] = store
 
-		self.db.commit()
+			self.db.commit()
+		finally:
+			self.db.execute("SELECT pg_advisory_unlock(%s)", (SCHEMA_LOCK,))
+			self.db.commit()
 		self._check_spills()
 
 
@@ -631,37 +649,13 @@ def open_stack(dsn: str, embed: Callable = None, **kwargs) -> PostgresMemoryStac
 	return PostgresMemoryStack(dsn, embed=embed, **kwargs)
 
 
-def single_tier(kind: str) -> list[MemoryTier]:
-	"""One tier, for a process serving one layer of a federation.
-
-	Args:
-		kind (str): working, episodic, semantic or procedural.
-
-	Returns:
-		list[MemoryTier]: Exactly one tier, spilling nowhere.
-
-	Raises:
-		ValueError: If the kind is not one of the four.
-	"""
-	if kind not in KINDS:
-		raise ValueError(f"Unknown kind '{kind}'; expected one of {KINDS}")
-
-	for tier in default_tiers():
-		if tier.kind == kind:
-			tier.spill_to   = None
-			tier.promote_to = None
-			return [tier]
-
-	raise ValueError(f"No default tier of kind '{kind}'")
-
-
 def main() -> int:
 	"""Run this file as an A2M server on PostgreSQL.
 
-		python a2m_postgres.py postgresql://a2m:a2m@127.0.0.1:55432/a2m
-		python a2m_postgres.py postgresql://... --http 8778
-		python a2m_postgres.py postgresql://... --tier working
-		python a2m_postgres.py postgresql://... --embed
+		python -m implementations.store_postgres postgresql://a2m:a2m@127.0.0.1:55432/a2m
+		python -m implementations.store_postgres postgresql://... --http 8778
+		python -m implementations.store_postgres postgresql://... --tier working
+		python -m implementations.store_postgres postgresql://... --embed
 
 	Returns:
 		int: Process exit code.
@@ -675,7 +669,7 @@ def main() -> int:
 
 	embed = None
 	if "--embed" in argv:
-		from retrieval import ollama_embedder
+		from a2m.retrieval import ollama_embedder
 		embed = ollama_embedder()
 
 	tiers = None

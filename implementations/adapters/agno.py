@@ -48,9 +48,9 @@ class A2MVectorDb(VectorDb):
 	"""An Agno knowledge base backed by an A2M server.
 
 	Example:
-		import a2m_client
+		from implementations import client as a2m_client
 
-		client    = a2m_client.connect_stdio(["python", "a2m_store.py", "memory.db"])
+		client    = a2m_client.connect_stdio(["python", "-m", "implementations.store_sqlite", "memory.db"])
 		knowledge = A2MVectorDb(client, namespace="handbook")
 
 		knowledge.insert("hash-1", [Document(content="the deploy key rotates every ninety days")])

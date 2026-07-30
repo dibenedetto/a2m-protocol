@@ -1,11 +1,11 @@
 """A minimal A2M 0.1 client, written from the specification alone.
 
-	python a2m_client.py --stdio python a2m_minimal.py -- describe
-	python a2m_client.py --stdio python a2m_store.py memory.db -- remember "the deploy key rotates every ninety days"
-	python a2m_client.py --http http://127.0.0.1:8778/ -- recall "how often does the key change?"
+	python implementations/client.py --stdio python implementations/server_minimal.py -- describe
+	python implementations/client.py --stdio python -m implementations.store_sqlite memory.db -- remember "the deploy key rotates every ninety days"
+	python implementations/client.py --http http://127.0.0.1:8778/ -- recall "how often does the key change?"
 
 This file deliberately imports **nothing from this project** — not jsonrpc.py,
-not a2m.py. Only the standard library. [a2m_minimal.py](a2m_minimal.py) does the
+not a2m/protocol.py. Only the standard library. [server_minimal.py](server_minimal.py) does the
 same thing for the server side, and for the same reason: an implementation that
 shares code with the reference proves only that the reference agrees with itself.
 
@@ -77,7 +77,7 @@ class StdioTransport:
 		"""Launch the server and start draining its stderr.
 
 		Args:
-			command (list[str]): What to run, e.g. ["python", "a2m_minimal.py"].
+			command (list[str]): What to run, e.g. ["python", "implementations/server_minimal.py"].
 
 		Raises:
 			OSError: If the command cannot be launched.
@@ -590,8 +590,8 @@ def searchable_tier(client: A2MClient) -> str:
 def main() -> int:
 	"""Run one command against a server.
 
-		a2m_client.py --stdio python a2m_minimal.py -- describe
-		a2m_client.py --http http://127.0.0.1:8778/ -- recall "which fallback region"
+		python implementations/client.py --stdio python implementations/server_minimal.py -- describe
+		python implementations/client.py --http http://127.0.0.1:8778/ -- recall "which fallback region"
 
 	Returns:
 		int: 0 on success, 1 on an A2M error, 2 on bad usage.

@@ -49,7 +49,7 @@ LangChain agent     Agno agent      n8n node        CrewAI crew
 
 ```python
 memory = connect_local(MemoryStack())               # in-process
-memory = connect_stdio([sys.executable, "a2m.py"])  # a child process
+memory = connect_stdio([sys.executable, "-m", "a2m"])  # a child process
 memory = connect_http("http://127.0.0.1:8778/")     # over the network
 
 memory.remember("the deploy key rotates every ninety days")
@@ -142,20 +142,28 @@ a vector database, is in [spec/implementing-a2m.md](spec/implementing-a2m.md).
 | [spec/a2m-0.1.md](spec/a2m-0.1.md) | **the normative specification** |
 | [spec/implementing-a2m.md](spec/implementing-a2m.md) | what each tier means, and where it should live |
 | [spec/schema/](spec/schema/) | JSON Schema for every request, response and record |
-| [a2m.py](a2m.py) | reference server and client, all capabilities |
-| [a2m_minimal.py](a2m_minimal.py) | independent `core`-only server, standard library only |
-| [a2m_minimal.ts](a2m_minimal.ts) | the same server in TypeScript, no dependencies, no build |
-| [a2m_client.py](a2m_client.py) | independent client and CLI, standard library only |
-| [a2m_conformance.py](a2m_conformance.py) | conformance suite for **any** A2M server |
-| [a2m_store.py](a2m_store.py) | reference persistent store: one SQLite file, one store per tier |
-| [a2m_postgres.py](a2m_postgres.py) | the same tier logic on PostgreSQL and pgvector |
-| [a2m_router.py](a2m_router.py) | reference federation: one process per tier, one router |
-| [memory.py](memory.py) · [retrieval.py](retrieval.py) · [text.py](text.py) · [jsonrpc.py](jsonrpc.py) | the reference stack |
-| [adapters/](adapters/) | LangChain and Agno, talking to an A2M server unmodified |
+| [a2m/](a2m/) | the reference library: [protocol.py](a2m/protocol.py) · [memory.py](a2m/memory.py) · [retrieval.py](a2m/retrieval.py) · [text.py](a2m/text.py) · [jsonrpc.py](a2m/jsonrpc.py) |
+| [implementations/server_minimal.py](implementations/server_minimal.py) | independent `core`-only server, standard library only |
+| [implementations/server_minimal.ts](implementations/server_minimal.ts) | the same server in TypeScript, no dependencies, no build |
+| [implementations/client.py](implementations/client.py) | independent client and CLI, standard library only |
+| [implementations/store.py](implementations/store.py) | the tier logic both SQL backends share — no SQL in it |
+| [implementations/store_sqlite.py](implementations/store_sqlite.py) | that logic on SQLite: one file, one store per tier |
+| [implementations/store_postgres.py](implementations/store_postgres.py) | the same logic on PostgreSQL and pgvector |
+| [implementations/server_federated.py](implementations/server_federated.py) | one A2M server per tier, one router in front |
+| [implementations/adapters/](implementations/adapters/) | LangChain and Agno, talking to an A2M server unmodified |
+| [tools/conformance.py](tools/conformance.py) | conformance suite for **any** A2M server |
+| [tools/test_a2m.py](tools/test_a2m.py) | `python -m tools.test_a2m` — no test runner, no network |
+| [tools/bench_embeddings.py](tools/bench_embeddings.py) | which embedding model backs recall, measured |
 | [examples/cross_framework.py](examples/cross_framework.py) | both frameworks sharing one store, as a runnable script |
-| [test_a2m.py](test_a2m.py) | `python test_a2m.py` — no test runner, no network |
-| [bench_embeddings.py](bench_embeddings.py) | which embedding model backs recall, measured |
 | [DECISIONS.md](DECISIONS.md) | why the non-obvious choices are what they are |
+
+Three directories, and the split is the argument. `a2m/` is the library an
+implementation is built out of. `implementations/` is the specification
+implemented more than once — two storage engines, two languages, two topologies —
+because one implementation only ever proves the document describes the program
+that was already written. `tools/` is what judges them, and
+[tools/conformance.py](tools/conformance.py) imports nothing from
+`implementations/` at all.
 
 The protocol, the reference implementation and the conformance suite need
 **nothing but the standard library**. `sqlite-vec` and `ollama` are optional and
@@ -167,29 +175,33 @@ The files are not equally good places to start, and the two largest are the
 worst ones.
 
 1. **[spec/a2m-0.1.md](spec/a2m-0.1.md)** — everything else is downstream of it.
-2. **[a2m_minimal.py](a2m_minimal.py)** (467 lines) — a whole server, written
-   from the specification alone. If you are implementing A2M, copy this.
-3. **[a2m_client.py](a2m_client.py)** — the other side, under the same rule.
-   Between them they show both halves of a conversation with nothing shared.
-4. **[a2m_store.py](a2m_store.py)** and **[a2m_router.py](a2m_router.py)** —
-   1700 and 1000 lines. These are *reference implementations*, not samples: they
-   exist to prove the protocol survives a real store and a real federation, and
-   to be read a section at a time when you hit the problem they solve. Reading
-   either front to back to learn A2M is the wrong way round.
+2. **[implementations/server_minimal.py](implementations/server_minimal.py)**
+   (467 lines) — a whole server, written from the specification alone. If you are
+   implementing A2M, copy this.
+3. **[implementations/client.py](implementations/client.py)** — the other side,
+   under the same rule. Between them they show both halves of a conversation with
+   nothing shared.
+4. **[implementations/store.py](implementations/store.py)**,
+   **[implementations/store_sqlite.py](implementations/store_sqlite.py)** and
+   **[implementations/server_federated.py](implementations/server_federated.py)**
+   — 1100, 800 and 1100 lines. These are *reference implementations*, not
+   samples: they exist to prove the protocol survives a real store and a real
+   federation, and to be read a section at a time when you hit the problem they
+   solve. Reading any of them front to back to learn A2M is the wrong way round.
 
 ---
 
 ## Conformance
 
-[a2m_conformance.py](a2m_conformance.py) speaks only the protocol — it never
+[tools/conformance.py](tools/conformance.py) speaks only the protocol — it never
 imports the server under test, so an implementation in another language is
 tested exactly as a Python one is.
 
 ```
-python a2m_conformance.py --stdio python a2m.py
-python a2m_conformance.py --stdio python a2m_minimal.py
-python a2m_conformance.py --stdio node --experimental-strip-types a2m_minimal.ts
-python a2m_conformance.py --http  http://127.0.0.1:8778/
+python -m tools.conformance --stdio python -m a2m
+python -m tools.conformance --stdio python implementations/server_minimal.py
+python -m tools.conformance --stdio node --experimental-strip-types implementations/server_minimal.ts
+python -m tools.conformance --http  http://127.0.0.1:8778/
 ```
 
 Checks are grouped by capability and skipped when undeclared. Declaring a
@@ -202,24 +214,29 @@ them:
 
 | | storage | declares | conformance |
 |---|---|---|---|
-| [a2m.py](a2m.py) | a dict in memory | everything | 78/78 |
-| [a2m_minimal.py](a2m_minimal.py) | a dict, stdlib only | `core` only | 34/34 |
-| [a2m_minimal.ts](a2m_minimal.ts) | a Map, **TypeScript** | `core` only | 34/34 |
-| [a2m_store.py](a2m_store.py) | SQLite + sqlite-vec | everything | 78/78 |
-| [a2m_postgres.py](a2m_postgres.py) | **PostgreSQL + pgvector** | everything | 78/78 |
-| [a2m_router.py](a2m_router.py) | four A2M servers | everything | 78/78 |
+| `python -m a2m` | a dict in memory | everything | 78/78 |
+| [server_minimal.py](implementations/server_minimal.py) | a dict, stdlib only | `core` only | 34/34 |
+| [server_minimal.ts](implementations/server_minimal.ts) | a Map, **TypeScript** | `core` only | 34/34 |
+| [store_sqlite.py](implementations/store_sqlite.py) | SQLite + sqlite-vec | everything | 78/78 |
+| [store_postgres.py](implementations/store_postgres.py) | **PostgreSQL + pgvector** | everything | 78/78 |
+| [server_federated.py](implementations/server_federated.py) | four A2M servers | everything | 78/78 |
+
+The federation takes `--backend sqlite` or `--backend postgres`, so the last row
+is really two: four SQLite backends, or four processes sharing one PostgreSQL
+database. Both pass 78/78, and the router cannot tell which it is talking to —
+it reaches its backends over the protocol and has no way to see inside one.
 
 Over HTTP the suite runs five further checks that stdio cannot reach — `Origin`,
 the version header, `405` on GET, the well-known profile — for **82/82**.
 
-[a2m_minimal.py](a2m_minimal.py) imports **nothing from this repository**. It
+[server_minimal.py](implementations/server_minimal.py) imports **nothing from this repository**. It
 exists to answer a question the reference implementation cannot: *is the
 specification enough on its own?* An implementation sharing code with the
 reference proves only that the reference agrees with itself. Writing it found a
-real bug — `a2m.py` was rejecting unrecognised parameters, breaking the
+real bug — `a2m/protocol.py` was rejecting unrecognised parameters, breaking the
 forward-compatibility rule that lets a newer client talk to an older server.
 
-[a2m_minimal.ts](a2m_minimal.ts) answers the next question: *is it enough in a
+[server_minimal.ts](implementations/server_minimal.ts) answers the next question: *is it enough in a
 language that is not the reference language?* It needs no dependencies and no
 build — `node --experimental-strip-types` runs the file as it is. The port is
 where a JSON-shaped protocol earns the description, and two rules did the work:
@@ -227,8 +244,8 @@ timestamps stay RFC 3339 strings where JavaScript's instinct is an epoch integer
 (§3.3), and an `id` is echoed back with its type intact where JavaScript would
 happily turn `1` into `"1"` (§3.2).
 
-Which makes the useful demonstration a pair: [a2m_client.py](a2m_client.py)
-talking to [a2m_minimal.ts](a2m_minimal.ts) is a Python client and a TypeScript
+Which makes the useful demonstration a pair: [client.py](implementations/client.py)
+talking to [server_minimal.ts](implementations/server_minimal.ts) is a Python client and a TypeScript
 server that share not one line of code, and neither was written against the
 other.
 
@@ -251,20 +268,27 @@ than one spreading across `0..1` — spec §5.3.
 
 ## Running it
 
-```
-python test_a2m.py                          # 219 checks, offline
-python demo_a2m_stack.py                    # the whole stack, on disk
-python demo_a2m_stack.py --router           # same, federated across processes
-python a2m_store.py memory.db               # a persistent server on stdio
-python a2m_router.py memories/ --http 8778  # federated, over HTTP
-```
-
-Talking to any of them, with a client that shares no code with them:
+Everything runs from the repository root.
 
 ```
-python a2m_client.py --stdio python a2m_store.py memory.db -- remember "the deploy key rotates every ninety days"
-python a2m_client.py --stdio python a2m_store.py memory.db -- recall   "how often does the key change?"
-python a2m_client.py --http  http://127.0.0.1:8778/         -- describe
+python -m tools.test_a2m                       # 219 checks, offline
+python -m tools.demo_stack                     # the whole stack, on disk
+python -m tools.demo_stack --router            # same, federated across processes
+python -m a2m                                  # the reference server, in memory
+python -m implementations.store_sqlite memory.db          # a persistent server on stdio
+python -m implementations.server_federated memories/ --http 8778   # federated, over HTTP
+python -m implementations.server_federated postgresql://a2m:a2m@127.0.0.1:55432/a2m --backend postgres
+```
+
+`server_minimal.py` and `client.py` are the exceptions: they import nothing at
+all, so they run as plain files from anywhere, which is the whole claim they are
+making.
+
+```
+python implementations/server_minimal.py
+python implementations/client.py --stdio python -m implementations.store_sqlite memory.db -- remember "the deploy key rotates every ninety days"
+python implementations/client.py --stdio python -m implementations.store_sqlite memory.db -- recall   "how often does the key change?"
+python implementations/client.py --http  http://127.0.0.1:8778/ -- describe
 ```
 
 ---

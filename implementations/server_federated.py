@@ -1,7 +1,7 @@
 """A federated A2M server: one tier per backend, one router in front.
 
-	python a2m_router.py memories/            # stdio, spawns four backends
-	python a2m_router.py memories/ --http 8778
+	python -m implementations.server_federated memories/            # stdio, spawns four backends
+	python -m implementations.server_federated memories/ --http 8778
 
 The router is an A2M **server** to its caller and an A2M **client** of four
 backends, each of which is an ordinary single-tier A2M server holding its own
@@ -47,15 +47,15 @@ import sys
 import time
 
 
-from   typing    import Any, Callable
+from   typing      import Any, Callable
 
 
-from   a2m       import (
+from   a2m         import (
 	A2M_CAPABILITIES, A2M_VERSION, CAPABILITY_NOT_SUPPORTED, INVALID_PARAMS,
 	UNKNOWN_TIER, MemoryClient, connect_stdio, serve_a2m_http,
 )
-from   jsonrpc   import Dispatcher, JsonRpcError, serve_stdio
-from   memory    import KINDS, MemoryTier, default_tiers, recency
+from   a2m.jsonrpc import Dispatcher, JsonRpcError, serve_stdio
+from   a2m.memory  import KINDS, MemoryTier, default_tiers, recency
 
 
 class MergeStrategy:
@@ -211,7 +211,7 @@ class Rerank(MergeStrategy):
 			# A ranker that is down must not take recall down with it.
 			return self.fallback.merge(query, results, limit)
 
-		from retrieval import cosine
+		from a2m.retrieval import cosine
 
 		asked  = vectors[0]
 		scored = []
@@ -252,7 +252,7 @@ def make_merge(kind: str = "rank-fusion", embed: Callable = None) -> MergeStrate
 		return RankFusion()
 	if kind in ("rerank", "re-rank"):
 		if embed is None:
-			from retrieval import ollama_embedder
+			from a2m.retrieval import ollama_embedder
 			embed = ollama_embedder()
 		return Rerank(embed)
 	raise ValueError(f"Unknown merge strategy '{kind}'; expected rank-fusion or rerank")
@@ -944,7 +944,7 @@ class MemoryRouter:
 		Returns:
 			float: Higher survives longer.
 		"""
-		from memory import from_rfc3339
+		from a2m.memory import from_rfc3339
 		try:
 			accessed = from_rfc3339(record.get("accessed_at") or record.get("created_at"))
 		except Exception:
@@ -954,17 +954,45 @@ class MemoryRouter:
 		return salience * recency(now - accessed, tier.half_life) * (1.0 + record.get("access_count", 0))
 
 
-def spawn_backends(root: str | pathlib.Path, tiers: list[MemoryTier] = None, embed: bool = False) -> dict[str, MemoryClient]:
-	"""Start one a2m_store.py process per tier, each with its own database.
+# Which store each backend process runs. The router itself is indifferent -- it
+# reaches its backends over the protocol and cannot see inside one -- so this is
+# a launcher convenience, not a federation concept. A backend somebody else
+# started, in a language nobody here has read, works exactly as well.
+BACKENDS = {
+	"sqlite"  : "implementations.store_sqlite",
+	"postgres": "implementations.store_postgres",
+}
+
+# `-m` needs the repository root importable, and the child inherits neither this
+# process' sys.path nor its working directory reliably.
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
+def spawn_backends(
+	where   : str | pathlib.Path,
+	tiers   : list[MemoryTier] = None,
+	embed   : bool             = False,
+	backend : str              = "sqlite",
+) -> dict[str, MemoryClient]:
+	"""Start one single-tier store process per tier.
 
 	Args:
-		root (str | Path): Directory for the database files. Created if absent.
+		where (str | Path): Where the rows go, which is the backend's business
+			rather than the router's. For 'sqlite', a directory -- created if absent,
+			one database file per tier. For 'postgres', a libpq DSN, shared by every
+			tier: the stores already partition themselves by table and by a tier
+			column, so one database serves the whole federation.
 		tiers (list[MemoryTier], optional): Which tiers to serve.
 		embed (bool, optional): Give each backend an embedder.
+		backend (str, optional): A key of BACKENDS. Every tier gets the same one
+			here, but nothing in the router requires that -- see 'spawn_backend'.
 
 	Returns:
 		dict[str, MemoryClient]: Tier name to its backend client. Close them when
 		finished, which terminates the child processes.
+
+	Raises:
+		ValueError: If the backend is not one of BACKENDS.
 
 	Example:
 		backends = spawn_backends("memories")
@@ -975,41 +1003,97 @@ def spawn_backends(root: str | pathlib.Path, tiers: list[MemoryTier] = None, emb
 			for backend in backends.values():
 				backend.close()
 	"""
-	root  = pathlib.Path(root)
-	root.mkdir(parents=True, exist_ok=True)
+	if backend not in BACKENDS:
+		raise ValueError(f"Unknown backend '{backend}'; expected one of {sorted(BACKENDS)}")
+
 	tiers = tiers or default_tiers()
 
-	backends = {}
-	for tier in tiers:
-		command = [sys.executable, "a2m_store.py", str(root / f"{tier.name}.db"), "--tier", tier.kind]
-		if embed:
-			command.append("--embed")
+	if backend == "sqlite":
+		root = pathlib.Path(where)
+		root.mkdir(parents=True, exist_ok=True)
+		target = lambda tier: str(root / f"{tier.name}.db")
+	else:
+		target = lambda tier: str(where)
 
-		backends[tier.name] = connect_stdio(
-			command,
-			on_stderr = lambda line, t=tier.name: print(f"  [{t}] {line}", file=sys.stderr),
-		)
+	return {tier.name: spawn_backend(tier, target(tier), embed=embed, backend=backend) for tier in tiers}
 
-	return backends
+
+def spawn_backend(tier: MemoryTier, where: str, embed: bool = False, backend: str = "sqlite") -> MemoryClient:
+	"""Start one backend, serving one tier.
+
+	Separate from 'spawn_backends' because a federation has no reason to be
+	homogeneous: working memory turns over constantly and is never searched, while
+	semantic memory is small and ranked hard. Putting the first on SQLite and the
+	second on PostgreSQL is a deployment decision, and the router cannot tell.
+
+	Args:
+		tier (MemoryTier): The tier this backend serves.
+		where (str): A database file for 'sqlite', a libpq DSN for 'postgres'.
+		embed (bool, optional): Give this backend an embedder.
+		backend (str, optional): A key of BACKENDS.
+
+	Returns:
+		MemoryClient: Connected to the child process.
+
+	Raises:
+		ValueError: If the backend is not one of BACKENDS.
+
+	Example:
+		backends = {
+			"working" : spawn_backend(TIERS[0], "memories/working.db"),
+			"semantic": spawn_backend(TIERS[2], DSN, backend="postgres"),
+		}
+	"""
+	if backend not in BACKENDS:
+		raise ValueError(f"Unknown backend '{backend}'; expected one of {sorted(BACKENDS)}")
+
+	command = [sys.executable, "-m", BACKENDS[backend], where, "--tier", tier.kind]
+	if embed:
+		command.append("--embed")
+
+	return connect_stdio(
+		command,
+		cwd       = str(ROOT),
+		on_stderr = lambda line, t=tier.name: print(f"  [{t}] {line}", file=sys.stderr),
+	)
 
 
 def main() -> int:
 	"""Run this file as a federated A2M server, spawning one backend per tier.
 
-		python a2m_router.py memories/
-		python a2m_router.py memories/ --http 8778
-		python a2m_router.py memories/ --rerank
+		python -m implementations.server_federated memories/
+		python -m implementations.server_federated memories/ --http 8778
+		python -m implementations.server_federated memories/ --rerank
+		python -m implementations.server_federated postgresql://a2m:a2m@127.0.0.1:55432/a2m --backend postgres
+
+	The positional argument is whatever the chosen backend stores rows in: a
+	directory of SQLite files, or a libpq DSN.
 
 	Returns:
 		int: Process exit code.
 	"""
-	argv = sys.argv[1:]
-	root = next((a for a in argv if not a.startswith("--") and not a.isdigit()), "memories")
+	argv    = sys.argv[1:]
+	backend = argv[argv.index("--backend") + 1] if "--backend" in argv else "sqlite"
+
+	skip  = {"--backend": 1, "--http": 1}
+	where = None
+	index = 0
+	while index < len(argv):
+		argument = argv[index]
+		if argument in skip:
+			index += 1 + skip[argument]
+			continue
+		if not argument.startswith("--") and not argument.isdigit() and where is None:
+			where = argument
+		index += 1
+
+	if where is None:
+		where = "memories" if backend == "sqlite" else "postgresql:///a2m"
 
 	merge = "rerank" if "--rerank" in argv else "rank-fusion"
 	embed = merge == "rerank"
 
-	backends = spawn_backends(root, embed=embed)
+	backends = spawn_backends(where, embed=embed, backend=backend)
 	router   = MemoryRouter(backends, merge=make_merge(merge))
 
 	try:

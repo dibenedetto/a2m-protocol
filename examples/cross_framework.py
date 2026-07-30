@@ -28,7 +28,7 @@ import tempfile
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 
-import a2m_client
+from implementations import client as a2m_client
 
 
 from   adapters.agno           import A2MVectorDb
@@ -65,7 +65,7 @@ def main() -> int:
 
 	print(f"\n  one A2M server at {database.name}, two frameworks\n")
 
-	client = a2m_client.connect_stdio([sys.executable, "a2m_store.py", str(database)])
+	client = a2m_client.connect_stdio([sys.executable, "-m", "implementations.store_sqlite", str(database)])
 
 	try:
 		# ---------------------------------------------------- LangChain writes

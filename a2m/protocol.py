@@ -23,7 +23,7 @@ a service across the network.
 	external                        records that point at a file, URL or blob
 
 This server declares every capability. A store that cannot do tiers or salience
-is still conformant if it declares only `core` — see a2m_minimal.py, which is
+is still conformant if it declares only `core` — see server_minimal.py, which is
 written from the specification alone and implements exactly that.
 """
 
@@ -32,15 +32,15 @@ import inspect
 import sys
 
 
-from   typing  import Any, Callable
+from   typing      import Any, Callable
 
 
-from   jsonrpc import (
+from   a2m.jsonrpc import (
 	Client, Dispatcher, INVALID_PARAMS, JsonRpcError,
 	HttpTransport, LocalTransport, StdioTransport, make_error_response,
 	serve_http, serve_stdio,
 )
-from   memory  import MemoryStack
+from   a2m.memory  import MemoryStack
 
 
 A2M_VERSION = "a2m/0.1"
@@ -83,7 +83,7 @@ class MemoryServer:
 	"""Exposes a memory stack over A2M.
 
 	Storage-agnostic by construction: it drives anything presenting the MemoryStack
-	interface. a2m_store.SqliteMemoryStack is a completely different engine and this
+	interface. store_sqlite.SqliteMemoryStack is a completely different engine and this
 	class runs it unchanged, which is the payoff for having a protocol boundary.
 
 	Example:
@@ -981,7 +981,7 @@ def connect_stdio(command: list[str], env: dict[str, str] = None, cwd: str = Non
 
 	Args:
 		command (list[str]): The command to launch, e.g.
-			[sys.executable, "a2m_store.py", "memory.db"].
+			[sys.executable, "-m", "implementations.store_sqlite", "memory.db"].
 		env (dict, optional): Child environment.
 		cwd (str, optional): Child working directory.
 		on_stderr (Callable, optional): Called per stderr line. The child must
@@ -1098,14 +1098,3 @@ def serve_over_http(stack: MemoryStack = None, name: str = "agent-memory", host:
 	server = serve_a2m_http(MemoryServer(stack=stack, name=name), host=host, port=port)
 	print(f"A2M {A2M_VERSION} on http://{host}:{port}/", file=sys.stderr)
 	server.serve_forever()
-
-
-if __name__ == "__main__":
-	# `python a2m.py [name]`            -> stdio server
-	# `python a2m.py --http [port]`     -> http server
-	if "--http" in sys.argv:
-		index = sys.argv.index("--http")
-		port  = int(sys.argv[index + 1]) if len(sys.argv) > index + 1 else 8778
-		serve_over_http(port=port)
-	else:
-		serve(name=sys.argv[1] if len(sys.argv) > 1 else "agent-memory")
