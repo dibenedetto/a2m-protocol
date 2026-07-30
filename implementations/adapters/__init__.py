@@ -7,6 +7,8 @@ every test, every conformance target and both demos.
 
 	adapters.langchain   LangChain chat history and retriever
 	adapters.agno        Agno vector database
+	adapters.crewai      CrewAI memory storage
+	adapters.autogen     AutoGen memory protocol
 
 The point they make together is the one A2M exists for: two frameworks with
 incompatible memory models, pointed at one store, reading each other's records.

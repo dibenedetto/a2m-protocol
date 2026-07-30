@@ -58,7 +58,7 @@ import psycopg
 from   psycopg.rows import dict_row
 
 
-from   a2m                   import A2M_VERSION, MemoryServer, serve_a2m_http, serve_stdio
+from   a2m                   import A2M_VERSION, MemoryServer, serve_a2m_http, serve_a2m_stdio
 from   a2m.memory            import MemoryRecord, MemoryTier
 from   implementations.store import TierStore, TieredMemoryStack, pack, single_tier, unpack
 
@@ -689,7 +689,7 @@ def main() -> int:
 			print(f"A2M {A2M_VERSION} on http://127.0.0.1:{port}/ backed by postgres", file=sys.stderr)
 			serve_a2m_http(server, port=port).serve_forever()
 		else:
-			serve_stdio(server.dispatcher)
+			serve_a2m_stdio(server)
 	finally:
 		stack.close()
 

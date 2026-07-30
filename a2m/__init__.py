@@ -23,8 +23,9 @@ would become a dependency of everyone who reads this as an example.
 from   a2m.protocol import (
 	A2M_CAPABILITIES, A2M_VERSION, CAPABILITY_NOT_SUPPORTED, EMBEDDING_MISMATCH,
 	INVALID_PARAMS, PROTOCOL_NOT_SUPPORTED, QUOTA_EXCEEDED, READ_ONLY, SCOPE_DENIED,
-	UNKNOWN_RECORD, UNKNOWN_TIER, MemoryClient, MemoryServer,
-	connect_http, connect_local, connect_stdio, serve_a2m_http, serve_stdio,
+	UNKNOWN_RECORD, UNKNOWN_TIER, EventLog, MemoryClient, MemoryServer,
+	connect_http, connect_local, connect_stdio, serve_a2m_http, serve_a2m_stdio,
+	serve_stdio,
 )
 
 
@@ -35,6 +36,7 @@ __all__ = [
 	"PROTOCOL_NOT_SUPPORTED", "QUOTA_EXCEEDED", "READ_ONLY", "SCOPE_DENIED",
 	"UNKNOWN_RECORD", "UNKNOWN_TIER",
 
-	"A2M_CAPABILITIES", "A2M_VERSION", "MemoryClient", "MemoryServer",
-	"connect_http", "connect_local", "connect_stdio", "serve_a2m_http", "serve_stdio",
+	"A2M_CAPABILITIES", "A2M_VERSION", "EventLog", "MemoryClient", "MemoryServer",
+	"connect_http", "connect_local", "connect_stdio", "serve_a2m_http",
+	"serve_a2m_stdio", "serve_stdio",
 ]

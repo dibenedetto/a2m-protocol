@@ -371,6 +371,9 @@ HANDLERS = {
 	"memory/session/list": unsupported("sessions"),
 	"memory/session/close": unsupported("sessions"),
 	"memory/fetch"       : unsupported("keys"),
+	"memory/events"      : unsupported("events"),
+	"memory/events/subscribe"  : unsupported("events"),
+	"memory/events/unsubscribe": unsupported("events"),
 }
 
 

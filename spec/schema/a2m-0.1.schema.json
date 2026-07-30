@@ -22,8 +22,172 @@
         "sessions",
         "embeddings",
         "keys",
-        "external"
+        "external",
+        "events"
       ]
+    },
+    "event": {
+      "type": "object",
+      "description": "One thing that happened to the store. Clients must tolerate kinds they do not recognise.",
+      "required": [
+        "kind",
+        "at"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "examples": [
+            "written",
+            "forgotten",
+            "promoted",
+            "consolidated",
+            "session_closed"
+          ]
+        },
+        "at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "id": {
+          "type": "string",
+          "description": "written: the record written."
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "forgotten, promoted: affected records."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "forgotten: how many were removed."
+        },
+        "tier": {
+          "type": "string",
+          "description": "written: home tier; promoted: destination."
+        },
+        "session": {
+          "type": "string",
+          "description": "written, session_closed."
+        },
+        "key": {
+          "type": "string",
+          "description": "written, when keys applies."
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "written: greater than 0 is a key replacement."
+        },
+        "moved": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "consolidated."
+        },
+        "promoted": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "consolidated."
+        },
+        "dropped": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "consolidated."
+        },
+        "summarized": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "consolidated."
+        }
+      }
+    },
+    "eventsParams": {
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "type": "string",
+          "description": "Opaque. Absent means 'now': no events, just the current cursor."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "kinds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "owner": {
+          "type": "string"
+        }
+      }
+    },
+    "eventsResult": {
+      "type": "object",
+      "required": [
+        "events",
+        "cursor"
+      ],
+      "properties": {
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/event"
+          },
+          "description": "Oldest first."
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "more": {
+          "type": "boolean"
+        },
+        "reset": {
+          "type": "boolean",
+          "description": "The supplied cursor could not be honoured; events may have been missed."
+        }
+      }
+    },
+    "eventsSubscribeParams": {
+      "type": "object",
+      "properties": {
+        "kinds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "owner": {
+          "type": "string"
+        }
+      }
+    },
+    "eventsSubscribeResult": {
+      "type": "object",
+      "required": [
+        "subscribed"
+      ],
+      "properties": {
+        "subscribed": {
+          "const": true
+        }
+      }
+    },
+    "eventsUnsubscribeParams": {
+      "type": "object"
+    },
+    "eventsUnsubscribeResult": {
+      "type": "object",
+      "required": [
+        "subscribed"
+      ],
+      "properties": {
+        "subscribed": {
+          "const": false
+        }
+      }
     },
     "record": {
       "type": "object",
@@ -343,6 +507,19 @@
             "max_content_length": {
               "type": "integer",
               "minimum": 1
+            }
+          }
+        },
+        "events": {
+          "type": "object",
+          "description": "Present when the events capability is declared.",
+          "required": [
+            "push"
+          ],
+          "properties": {
+            "push": {
+              "type": "boolean",
+              "description": "Whether memory/events/subscribe works on this connection."
             }
           }
         },
@@ -984,6 +1161,42 @@
         "$ref": "#/$defs/fetchResult"
       },
       "capability": "keys"
+    },
+    "memory/events": {
+      "params": {
+        "$ref": "#/$defs/eventsParams"
+      },
+      "result": {
+        "$ref": "#/$defs/eventsResult"
+      },
+      "capability": "events"
+    },
+    "memory/events/subscribe": {
+      "params": {
+        "$ref": "#/$defs/eventsSubscribeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/eventsSubscribeResult"
+      },
+      "capability": "events"
+    },
+    "memory/events/unsubscribe": {
+      "params": {
+        "$ref": "#/$defs/eventsUnsubscribeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/eventsUnsubscribeResult"
+      },
+      "capability": "events"
+    }
+  },
+  "notifications": {
+    "memory/event": {
+      "description": "Server to client, after memory/events/subscribe. Carries no id and expects no reply.",
+      "params": {
+        "$ref": "#/$defs/event"
+      },
+      "capability": "events"
     }
   }
 }

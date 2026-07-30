@@ -715,6 +715,63 @@ def test_external() -> None:
 		check("a uri without the capability is refused", exc.code == -32003, exc.code)
 
 
+def test_events() -> None:
+	print("== events ==")
+
+	from a2m import EventLog
+
+	log   = EventLog(retain=4)
+	start = log.head()
+	for n in range(3):
+		log.append("written", id=f"r{n}")
+
+	reply = log.read(cursor=start)
+	check("a cursor replays what happened", [e["id"] for e in reply["events"]] == ["r0", "r1", "r2"], reply)
+	check("the cursor advances past what was read", log.read(cursor=reply["cursor"])["events"] == [])
+
+	first  = log.read(cursor=start, limit=2)
+	second = log.read(cursor=first["cursor"])
+	check("a limit never drops or repeats events",
+	      [e["id"] for e in first["events"] + second["events"]] == ["r0", "r1", "r2"],
+	      (first, second))
+	check("a limit reports there is more", first.get("more") is True, first)
+
+	for n in range(3, 9):
+		log.append("written", id=f"r{n}")
+	lost = log.read(cursor=start)
+	check("a cursor behind the retention window resets", lost.get("reset") is True, lost)
+	check("and continues from the oldest retained",
+	      [e["id"] for e in lost["events"]] == ["r5", "r6", "r7", "r8"], lost)
+
+	check("a foreign cursor resets rather than misreads",
+	      log.read(cursor="deadbeef:2").get("reset") is True)
+
+	scoped = EventLog()
+	head   = scoped.head()
+	scoped.append("written", owner="alice", id="a")
+	scoped.append("written", id="shared")
+	check("a scoped read sees its own and unowned events",
+	      [e["id"] for e in scoped.read(cursor=head, agent="alice")["events"]] == ["a", "shared"])
+	check("a scoped read never sees another owner's events",
+	      [e["id"] for e in scoped.read(cursor=head, agent="bob")["events"]] == ["shared"])
+	check("filtered kinds are never re-offered",
+	      scoped.read(cursor=scoped.read(cursor=head, kinds=["forgotten"])["cursor"])["events"] == [])
+
+	# The server layer: push and poll are two views of one log.
+	memory   = connect_local(MemoryStack())
+	position = memory.events()["cursor"]
+	memory.subscribe_events()
+	ids    = memory.remember("the deploy key rotates every ninety days")
+	pushed = memory.take_events()
+	check("a subscribed local client is pushed the write", [e.get("id") for e in pushed] == ids, pushed)
+	polled = memory.events(cursor=position)["events"]
+	check("the same event is still readable by poll", [e.get("id") for e in polled] == ids, polled)
+	memory.unsubscribe_events()
+	memory.remember("nothing should arrive for this")
+	check("an unsubscribed client is pushed nothing", memory.take_events() == [])
+	memory.close()
+
+
 def test_a2m_local() -> None:
 	print("== a2m, in-process ==")
 
@@ -937,6 +994,7 @@ def main() -> int:
 	test_keys()
 	test_caller_embeddings()
 	test_external()
+	test_events()
 	test_a2m_local()
 	test_a2m_spec()
 	test_a2m_http()

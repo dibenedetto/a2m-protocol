@@ -505,6 +505,74 @@ class A2MClient:
 		return self._call("memory/fetch", {"key": key}).get("record", None)
 
 
+	def events(self, cursor: str = None, limit: int = 256, kinds: list = None) -> dict:
+		"""What changed since a cursor (spec §4.12).
+
+		The cursor is opaque and never parsed here: it is stored and handed back,
+		which is the entire client half of the contract. A reply carrying 'reset'
+		means events were missed -- re-read whatever was being tracked.
+
+		Args:
+			cursor (str, optional): Where to read from. Absent means now: the
+				reply carries no events, only the cursor to poll from next.
+			limit (int, optional): Maximum events per poll.
+			kinds (list, optional): Keep only these event kinds.
+
+		Returns:
+			dict: 'events' (oldest first) and 'cursor', plus 'more' and 'reset'
+			when true.
+		"""
+		self._require("events")
+
+		params = {"limit": limit}
+		if cursor is not None:
+			params["cursor"] = cursor
+		if kinds is not None:
+			params["kinds"] = list(kinds)
+
+		return self._call("memory/events", params)
+
+
+	def subscribe_events(self, kinds: list = None) -> bool:
+		"""Ask the server to push events on this connection (spec §4.13).
+
+		Only meaningful where the transport can carry a notification back, which
+		HTTP cannot -- check describe()['events']['push'] first, or be ready for
+		-32003. Pushed events accumulate on the transport and are read with
+		take_events().
+
+		Args:
+			kinds (list, optional): Deliver only these event kinds.
+
+		Returns:
+			bool: True when subscribed.
+		"""
+		self._require("events")
+		params = {"kinds": list(kinds)} if kinds else {}
+		return bool(self._call("memory/events/subscribe", params).get("subscribed", False))
+
+
+	def take_events(self) -> list[dict]:
+		"""The events the server has pushed since the last call, oldest first.
+
+		Returns:
+			list[dict]: Event objects from 'memory/event' notifications the
+			transport stashed while reading responses.
+		"""
+		stashed = getattr(self.transport, "notifications", None) or []
+		events  = []
+		kept    = []
+
+		for message in stashed:
+			if isinstance(message, dict) and message.get("method", None) == "memory/event":
+				events.append(message.get("params", {}))
+			else:
+				kept.append(message)
+
+		stashed[:] = kept
+		return events
+
+
 	def resolve(self, record: dict, opener=None):
 		"""Dereference a record's 'uri' -- deliberately, and on this side.
 
@@ -660,8 +728,19 @@ def main() -> int:
 				return 2
 			print(json.dumps(client.fetch(rest[0]), indent=2))
 
+		elif verb == "events":
+			# With no cursor this prints one to poll from; with one it prints
+			# what happened since. Against an HTTP server the cursor survives
+			# across invocations, which is the whole point of it being a string.
+			reply = client.events(cursor=rest[0] if rest else None)
+			for event in reply.get("events", []):
+				print(f"  {event.get('at', '')}  {json.dumps(event)}")
+			if reply.get("reset", False):
+				print("  (cursor was too old; events may have been missed)")
+			print(f"  cursor: {reply.get('cursor', '')}")
+
 		else:
-			print(f"Unknown command '{verb}'. Try describe, remember, recall, timeline or fetch.")
+			print(f"Unknown command '{verb}'. Try describe, remember, recall, timeline, fetch or events.")
 			return 2
 
 	except A2MError as exc:

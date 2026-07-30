@@ -392,7 +392,48 @@ to forget a conversation without forgetting the manual.
 
 ---
 
-## 11. Anti-patterns
+## 11. Watching a store — `events` in practice
+
+The capability is two delivery modes over one log, and the log is the part to
+get right.
+
+**Implement the cursor first; push is a mirror.** Every mutation appends one
+event to a bounded, in-memory log; `memory/events` walks it, and push — where
+the transport can carry a notification at all — simply forwards each append to
+the one subscribed connection. If an event can be pushed but not polled, a
+client that misses the notification has no way back; the reference emits
+nothing that did not go through the log first.
+
+**The log is server state, not storage state.** It does not survive a restart,
+and that is correct: a cursor is valid only on the server that issued it, and
+a client holding a stale cursor gets `reset: true` plus the oldest retained
+events — the signal to re-read whatever it was tracking. Persisting the log
+buys almost nothing (the client must handle `reset` anyway, for retention) and
+costs a schema, a growth policy and a vacuum job in every backend.
+
+**Bound it.** The reference retains 1024 events. An abandoned cursor then
+costs nothing, which is what makes `events` safe to declare unconditionally —
+an unbounded log would make the capability affordable only to servers with
+garbage collection.
+
+**Coalesce ruthlessly.** One `consolidated` event per reorganisation, carrying
+counts; one `forgotten` event per forget, carrying a count. Only `written` is
+per-record. A watcher that needs the details re-reads through `recall` or
+`timeline` — the events say *that* and *when*, not *what*.
+
+**A consumer is a loop, not a callback.** The robust shape on any transport:
+
+	position = events()["cursor"]              # subscribe from now
+	loop:
+		reply    = events(cursor=position)
+		handle(reply["events"])
+		if reply.get("reset"):  re-read tracked state
+		position = reply["cursor"]
+
+Push, where available, only changes how long the loop sleeps.
+
+
+## 12. Anti-patterns
 
 **One store for all four tiers.** They have opposing access shapes: working is
 replay-everything with the tightest latency, episodic is filtered similarity at
@@ -416,3 +457,8 @@ which A2M explicitly permits, silently changes what that threshold means.
 **Letting semantic memory accumulate contradictions.** §4. This is the failure
 that turns a memory system from useful into actively harmful, because the wrong
 fact is recalled with exactly the same confidence as the right one.
+
+**Rebuilding state from events alone.** §11: events are notification, not
+replication. A consumer that reconstructs the store from `written` events has
+built a second store that silently diverges on the first `reset`. Watch with
+events; read with `recall`, `timeline` and `fetch`.

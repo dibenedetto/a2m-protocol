@@ -142,12 +142,9 @@ def test_core(client: Client, report: Report, profile: dict[str, Any]) -> None:
 	report.check("methods is a list"          , isinstance(profile.get("methods"), list))
 
 	declared = set(profile.get("capabilities", []))
-	# 'events' is reserved for a later version (spec 9.1) and is deliberately not
-	# in this set: a 0.1 server declaring it is declaring something 0.1 does not
-	# define, which is exactly what this check is for.
 	report.check("declared capabilities are known",
 	             declared <= {"core", "tiers", "salience", "scopes", "sessions",
-	                          "embeddings", "keys", "external"},
+	                          "embeddings", "keys", "external", "events"},
 	             declared)
 
 	expect_error(report, "an incompatible protocol is rejected", PROTOCOL_NOT_SUPPORTED,
@@ -538,6 +535,134 @@ def test_external(client: Client, report: Report, profile: dict[str, Any]) -> No
 	client.call("memory/forget", {"ids": ids})
 
 
+def test_events(client: Client, report: Report, profile: dict[str, Any]) -> None:
+	"""Check the 'events' capability: cursors, coalescing, and push where carried.
+
+	The check that matters is exactly-once: successive polls, each carrying the
+	cursor the previous reply returned, must see every retained event once, in
+	order, with no duplicates and no gaps (spec §4.12). A watcher that can miss
+	a write silently is worse than no watcher at all.
+
+	Args:
+		client (Client): Connected to the server under test.
+		report (Report): Where to record results.
+		profile (dict): The server's describe result.
+	"""
+	print("\n  events")
+
+	contract = profile.get("events")
+	report.check("describe reports an events contract",
+	             isinstance(contract, dict) and isinstance(contract.get("push"), bool),
+	             contract)
+
+	opening = client.call("memory/events", {})
+	report.check("a poll with no cursor returns no events, only a cursor",
+	             opening.get("events") == [] and isinstance(opening.get("cursor"), str) and opening["cursor"],
+	             opening)
+
+	cursor = opening.get("cursor")
+	marker = uuid.uuid4().hex
+
+	written = client.call("memory/remember", {"records": [{"content": f"event probe {marker}"}]})
+	ids     = written.get("ids", [])
+
+	reply  = client.call("memory/events", {"cursor": cursor})
+	events = reply.get("events", [])
+	report.check("a write produces a written event",
+	             any(e.get("kind") == "written" and e.get("id") == ids[0] for e in events),
+	             events)
+	report.check("events carry an RFC 3339 timestamp",
+	             all(is_rfc3339(e.get("at")) for e in events), events)
+	report.check("the reply carries a new cursor", isinstance(reply.get("cursor"), str), reply)
+
+	cursor = reply.get("cursor")
+	drained = client.call("memory/events", {"cursor": cursor})
+	report.check("a poll from the returned cursor is empty until something happens",
+	             drained.get("events") == [], drained)
+
+	# Exactly once, in order, across a limit boundary.
+	cursor = drained.get("cursor")
+	more_ids = client.call("memory/remember", {"records": [
+		{"content": f"event probe two {marker}"},
+		{"content": f"event probe three {marker}"},
+		{"content": f"event probe four {marker}"},
+	]}).get("ids", [])
+
+	first  = client.call("memory/events", {"cursor": cursor, "limit": 2})
+	second = client.call("memory/events", {"cursor": first.get("cursor"), "limit": 100})
+	seen   = [e.get("id") for e in first.get("events", []) + second.get("events", [])
+	          if e.get("kind") == "written"]
+	report.check("successive polls see every event exactly once, in order",
+	             seen == more_ids, (seen, more_ids))
+
+	# Coalescing: however many records a forget removes, it is one event.
+	cursor    = second.get("cursor")
+	forgotten = client.call("memory/forget", {"ids": ids + more_ids}).get("forgotten", 0)
+	felt      = [e for e in client.call("memory/events", {"cursor": cursor}).get("events", [])
+	             if e.get("kind") == "forgotten"]
+	report.check("a forget is one coalesced event, not one per record",
+	             len(felt) == 1 and felt[0].get("count") == forgotten,
+	             (felt, forgotten))
+
+	if "tiers" in set(profile.get("capabilities", [])):
+		cursor = client.call("memory/events", {}).get("cursor")
+		client.call("memory/consolidate", {})
+		bulk = [e for e in client.call("memory/events", {"cursor": cursor}).get("events", [])
+		        if e.get("kind") == "consolidated"]
+		report.check("a consolidation is one coalesced event",
+		             len(bulk) == 1, bulk)
+
+	# The kinds filter is applied by the server, and filtered events are not
+	# re-offered later.
+	cursor = client.call("memory/events", {}).get("cursor")
+	kept   = client.call("memory/remember", {"records": [{"content": f"kind filter probe {marker}"}]}).get("ids", [])
+	client.call("memory/forget", {"ids": kept})
+	only = client.call("memory/events", {"cursor": cursor, "kinds": ["forgotten"]}).get("events", [])
+	report.check("a kinds filter keeps only those kinds",
+	             bool(only) and all(e.get("kind") == "forgotten" for e in only), only)
+
+	# A cursor this server never issued: reset, or a refusal -- both conformant.
+	try:
+		stale = client.call("memory/events", {"cursor": f"not-a-cursor-{marker}"})
+		report.check("an unrecognised cursor is answered with reset, not silence",
+		             stale.get("reset") is True and isinstance(stale.get("cursor"), str), stale)
+	except JsonRpcError as exc:
+		report.check("an unrecognised cursor is answered with reset, not silence",
+		             exc.code == INVALID_PARAMS, exc.code)
+
+	push = bool(isinstance(contract, dict) and contract.get("push", False))
+	if push:
+		subscribed = client.call("memory/events/subscribe", {})
+		report.check("subscribe reports its state", subscribed.get("subscribed") is True, subscribed)
+
+		pushed_ids = client.call("memory/remember", {"records": [{"content": f"push probe {marker}"}]}).get("ids", [])
+		# A notification is written after a response, so the next response read
+		# is what pulls it off the wire and into the transport's stash.
+		client.call("memory/describe", {})
+		pushed = [m for m in client.take_notifications()
+		          if isinstance(m, dict) and m.get("method") == "memory/event"]
+		report.check("a subscribed client is pushed the event as a notification",
+		             any(m.get("params", {}).get("id") == pushed_ids[0] for m in pushed),
+		             pushed)
+		report.check("a pushed notification carries no id",
+		             all("id" not in m for m in pushed), pushed)
+
+		closed = client.call("memory/events/unsubscribe", {})
+		report.check("unsubscribe reports its state", closed.get("subscribed") is False, closed)
+
+		client.call("memory/remember", {"records": [{"content": f"silent probe {marker}"}]})
+		client.call("memory/describe", {})
+		quiet = [m for m in client.take_notifications()
+		         if isinstance(m, dict) and m.get("method") == "memory/event"]
+		report.check("an unsubscribed client is pushed nothing", not quiet, quiet)
+
+		client.call("memory/forget", {"query": f"probe {marker}"})
+	else:
+		expect_error(report, "subscribe without push is -32003", CAPABILITY_NOT_SUPPORTED,
+		             lambda: client.call("memory/events/subscribe", {}))
+		report.skip("push delivery checks", "push is not available on this connection")
+
+
 def test_undeclared(client: Client, report: Report, profile: dict[str, Any]) -> None:
 	"""Check that undeclared capabilities answer -32003, not -32601.
 
@@ -560,6 +685,8 @@ def test_undeclared(client: Client, report: Report, profile: dict[str, Any]) -> 
 		("sessions", "memory/session/list" , {}),
 		("sessions", "memory/session/close", {"session": "x"}),
 		("keys"    , "memory/fetch"        , {"key": "x/y"}),
+		("events"  , "memory/events"       , {}),
+		("events"  , "memory/events/subscribe", {}),
 	]
 
 	ran = False
@@ -678,7 +805,7 @@ def run(client: Client) -> Report:
 	for capability, suite in (("tiers", test_tiers), ("salience", test_salience),
 	                          ("scopes", test_scopes), ("sessions", test_sessions),
 	                          ("keys", test_keys), ("embeddings", test_embeddings),
-	                          ("external", test_external)):
+	                          ("external", test_external), ("events", test_events)):
 		if capability in declared:
 			suite(client, report, profile)
 		else:

@@ -90,9 +90,20 @@ and layers the rest into **capabilities** a server declares and a client checks.
 | `keys` | `fetch` *(adds `key`: addressable, upsert)* | no |
 | `embeddings` | *(adds `embedding`: caller-owned, verbatim)* | no |
 | `external` | *(adds `uri`: points at a file, URL or blob)* | no |
+| `events` | `events` `events/subscribe` `events/unsubscribe` | no |
 
 A call into an undeclared capability returns `-32003 CAPABILITY_NOT_SUPPORTED` —
 **not** `-32601`, which a client cannot distinguish from a typo.
+
+**`events` is a cursor first and a push second.** A client brings the position
+it has reached and gets back everything that happened after it, ordered,
+exactly once — on any transport, with no subscription state on the server. On
+the transports that can carry a notification back (stdio, in-process), a
+client may additionally subscribe and have the same events pushed as they
+happen; over HTTP `describe` honestly reports `"push": false` and the cursor
+is the interface. Volume is answered by coalescing: a consolidation that moves
+ten thousand records is **one** event carrying counts. Spec §4.12–§4.14,
+DECISION 026.
 
 ---
 
@@ -135,6 +146,43 @@ a vector database, is in [spec/implementing-a2m.md](spec/implementing-a2m.md).
 
 ---
 
+## Why not an MCP tool server?
+
+It is the right first question: memory servers already ship as MCP tools, and
+every MCP client can call them today. A2M deliberately shares MCP's plumbing —
+JSON-RPC 2.0, the same newline-delimited stdio framing, one POST endpoint, no
+batches, no server-initiated requests (DECISION 021) — so the two compose
+rather than compete. What A2M refuses to do is put the *store* behind
+`tools/call`, because a tool result is text for a model to read, and a memory
+store's consumers are mostly not models:
+
+- **Records stay typed.** `metadata` round-trips byte-for-byte, ids are
+  opaque, timestamps are RFC 3339, a caller's embedding is stored verbatim —
+  rules a conformance suite can check on a wire format, and can only *hope
+  for* in a tool description.
+- **Negotiation stays checkable.** `describe` declares capabilities and an
+  undeclared one answers `-32003`. Tool lists are per-server vocabulary — two
+  memory MCP servers already disagree on tool names, which is the silo
+  rebuilt one layer up.
+- **The memory semantics survive.** Replay versus search — `timeline` versus
+  `recall` — is a distinction frameworks build on. Flattened into tools it
+  survives only as a sentence a model may or may not read.
+
+The relationship, made runnable:
+[implementations/bridge_mcp.py](implementations/bridge_mcp.py) is a
+stdlib-only MCP server whose tools are **any** A2M server. Point Claude
+Desktop, Claude Code or Cursor at it and every MCP client becomes an A2M
+client — with the tool list derived from the store's declared capabilities:
+
+```
+python -m implementations.bridge_mcp --stdio python -m implementations.store_sqlite memory.db
+```
+
+MCP is how a *model* reaches capabilities; A2M is how *agent infrastructure*
+shares memory underneath. See DECISION 027.
+
+---
+
 ## What is in here
 
 | | |
@@ -150,11 +198,13 @@ a vector database, is in [spec/implementing-a2m.md](spec/implementing-a2m.md).
 | [implementations/store_sqlite.py](implementations/store_sqlite.py) | that logic on SQLite: one file, one store per tier |
 | [implementations/store_postgres.py](implementations/store_postgres.py) | the same logic on PostgreSQL and pgvector |
 | [implementations/server_federated.py](implementations/server_federated.py) | one A2M server per tier, one router in front |
-| [implementations/adapters/](implementations/adapters/) | LangChain and Agno, talking to an A2M server unmodified |
+| [implementations/bridge_mcp.py](implementations/bridge_mcp.py) | any A2M server as an MCP tool server, stdlib only |
+| [implementations/adapters/](implementations/adapters/) | LangChain, Agno, CrewAI and AutoGen, talking to an A2M server unmodified |
 | [tools/conformance.py](tools/conformance.py) | conformance suite for **any** A2M server |
 | [tools/test_a2m.py](tools/test_a2m.py) | `python -m tools.test_a2m` — no test runner, no network |
 | [tools/bench_embeddings.py](tools/bench_embeddings.py) | which embedding model backs recall, measured |
 | [examples/cross_framework.py](examples/cross_framework.py) | both frameworks sharing one store, as a runnable script |
+| [examples/n8n_workflow.json](examples/n8n_workflow.json) | n8n against an A2M server — stock HTTP nodes, no custom node |
 | [DECISIONS.md](DECISIONS.md) | why the non-obvious choices are what they are |
 
 Three directories, and the split is the argument. `a2m/` is the library an
@@ -214,20 +264,24 @@ them:
 
 | | storage | declares | conformance |
 |---|---|---|---|
-| `python -m a2m` | a dict in memory | everything | 78/78 |
-| [server_minimal.py](implementations/server_minimal.py) | a dict, stdlib only | `core` only | 34/34 |
-| [server_minimal.ts](implementations/server_minimal.ts) | a Map, **TypeScript** | `core` only | 34/34 |
-| [store_sqlite.py](implementations/store_sqlite.py) | SQLite + sqlite-vec | everything | 78/78 |
-| [store_postgres.py](implementations/store_postgres.py) | **PostgreSQL + pgvector** | everything | 78/78 |
-| [server_federated.py](implementations/server_federated.py) | four A2M servers | everything | 78/78 |
+| `python -m a2m` | a dict in memory | everything | 94/94 |
+| [server_minimal.py](implementations/server_minimal.py) | a dict, stdlib only | `core` only | 36/36 |
+| [server_minimal.ts](implementations/server_minimal.ts) | a Map, **TypeScript** | `core` + `keys` | 46/46 |
+| [store_sqlite.py](implementations/store_sqlite.py) | SQLite + sqlite-vec | everything | 94/94 |
+| [store_postgres.py](implementations/store_postgres.py) | **PostgreSQL + pgvector** | everything | 94/94 |
+| [server_federated.py](implementations/server_federated.py) | four A2M servers | everything | 94/94 |
 
 The federation takes `--backend sqlite` or `--backend postgres`, so the last row
 is really two: four SQLite backends, or four processes sharing one PostgreSQL
-database. Both pass 78/78, and the router cannot tell which it is talking to —
+database. Both pass 94/94, and the router cannot tell which it is talking to —
 it reaches its backends over the protocol and has no way to see inside one.
 
-Over HTTP the suite runs five further checks that stdio cannot reach — `Origin`,
-the version header, `405` on GET, the well-known profile — for **82/82**.
+Over stdio the full-capability rows include push delivery end to end: the
+suite subscribes, writes, and reads the `memory/event` notification off the
+same pipe. Over HTTP the suite instead verifies that push is honestly refused
+(`describe` reports `"push": false`, subscribe answers `-32003`) and runs the
+binding checks stdio cannot reach — `Origin`, the version header, `405` on
+GET, the well-known profile — landing on **94/94** there too.
 
 [server_minimal.py](implementations/server_minimal.py) imports **nothing from this repository**. It
 exists to answer a question the reference implementation cannot: *is the
@@ -271,7 +325,7 @@ than one spreading across `0..1` — spec §5.3.
 Everything runs from the repository root.
 
 ```
-python -m tools.test_a2m                       # 219 checks, offline
+python -m tools.test_a2m                       # 232 checks, offline
 python -m tools.demo_stack                     # the whole stack, on disk
 python -m tools.demo_stack --router            # same, federated across processes
 python -m a2m                                  # the reference server, in memory
@@ -312,15 +366,14 @@ is **not gone** — it remains in this repository's history at commit
 | identity | caller-set `key`, upsert by key | **both** — opaque `id` *and* addressable `key` |
 | embeddings | **caller-owned**, stored verbatim | **both** — caller-owned, or server-side |
 | record kinds | `external` as a fifth *type* | `external` as a record *property*, legal in any tier |
-| events | `WS /subscribe` | deferred — name reserved for 0.2 |
-| conformance | — | executable suite, four passing implementations |
+| events | `WS /subscribe` | cursor polling on every transport, push where one can carry it |
+| conformance | — | executable suite, six passing implementations |
 
 The four memory kinds survived unchanged, having been arrived at twice
 independently — which is the strongest evidence in this repository that they are
 the right four.
 
-Two of the draft's ideas are now **in** 0.1, and both improve on what they
-replaced:
+The draft's ideas are now **in** 0.1, each improving on what it replaced:
 
 - **Addressable keys** (`keys`). `id` identifies a write; `key` addresses a
   *fact*. Writing to an occupied key **replaces** what is there, keeping the id
@@ -346,9 +399,17 @@ replaced:
   would make every write a request the server chose to issue to an address its
   caller supplied.
 
+- **Events** (`events`). The draft wanted `WS /subscribe`; 0.1 ships something
+  a plain request/response channel can carry: an opaque cursor that replays
+  what happened, exactly once and in order, on any transport — with push as an
+  optional layer on the transports that can deliver a notification. What kept
+  it out of earlier drafts was `owner` scoping, and the answer is recall's:
+  an event is delivered only to a caller who could have recalled the record
+  it describes — see [DECISIONS.md](DECISIONS.md) 026.
+
 Hierarchical namespaces were **folded into keys** rather than added as a
-separate dimension; see [DECISIONS.md](DECISIONS.md) 017. All four of the
-draft's ideas are now either in 0.1 or accounted for.
+separate dimension; see [DECISIONS.md](DECISIONS.md) 017. All of the draft's
+ideas are now in 0.1.
 
 ---
 

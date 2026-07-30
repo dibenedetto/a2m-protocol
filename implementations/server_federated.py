@@ -52,9 +52,10 @@ from   typing      import Any, Callable
 
 from   a2m         import (
 	A2M_CAPABILITIES, A2M_VERSION, CAPABILITY_NOT_SUPPORTED, INVALID_PARAMS,
-	UNKNOWN_TIER, MemoryClient, connect_stdio, serve_a2m_http,
+	UNKNOWN_TIER, EventLog, MemoryClient, connect_stdio, serve_a2m_http,
+	serve_a2m_stdio,
 )
-from   a2m.jsonrpc import Dispatcher, JsonRpcError, serve_stdio
+from   a2m.jsonrpc import Dispatcher, JsonRpcError, make_notification
 from   a2m.memory  import KINDS, MemoryTier, default_tiers, recency
 
 
@@ -286,7 +287,7 @@ class MemoryRouter:
 		Example:
 			backends = spawn_backends("memories")
 			router   = MemoryRouter(backends, merge=make_merge("rerank"))
-			serve_stdio(router.dispatcher)
+			serve_a2m_stdio(router)
 		"""
 		tiers = tiers or default_tiers()
 
@@ -300,8 +301,19 @@ class MemoryRouter:
 			raise ValueError("No backend matches any configured tier")
 
 		self.capabilities = ["core", "tiers", "salience", "scopes", "sessions",
-		                     "keys", "embeddings", "external"]
+		                     "keys", "embeddings", "external", "events"]
 		self.methods      = [m for c in self.capabilities for m in A2M_CAPABILITIES.get(c, [])]
+
+		# The router keeps its own event log rather than merging its backends'.
+		# Every write, move and delete passes through the router, so its log is
+		# already the federation's — and four backend cursors folded into one
+		# would break the moment a backend restarts (spec §4.12: a cursor is
+		# valid only on the server that issued it).
+		self.events_log     = EventLog()
+		self.push_events    = True
+		self.push_transport = False
+		self._subscription  = None
+		self._outbox        : list[dict[str, Any]] = []
 
 		self.dispatcher = Dispatcher(allow_batch=False)   # spec §8: no batches
 		handlers = {
@@ -316,9 +328,101 @@ class MemoryRouter:
 			"memory/session/list": self.session_list,
 			"memory/session/close": self.session_close,
 			"memory/fetch"       : self.fetch,
+			"memory/events"      : self.events,
+			"memory/events/subscribe"  : self.events_subscribe,
+			"memory/events/unsubscribe": self.events_unsubscribe,
 		}
 		for method, handler in handlers.items():
 			self.dispatcher.register(method, handler)
+
+
+	# ------------------------------------------------------------------ events
+
+	def events(self, cursor: str = None, limit: int = 256, kinds: list[str] = None,
+	           owner: str = None, **ignored: Any) -> dict[str, Any]:
+		"""Handle 'memory/events' -- what changed, seen from the router.
+
+		Args:
+			cursor (str, optional): Where to read from. Absent means now.
+			limit (int, optional): Maximum events per poll.
+			kinds (list[str], optional): Keep only these kinds.
+			owner (str, optional): Scope, mirroring recall visibility.
+			**ignored: Unrecognised parameters are ignored.
+
+		Returns:
+			dict: 'events' and 'cursor', plus 'more' and 'reset' when true.
+		"""
+		return self.events_log.read(cursor=cursor, limit=limit, kinds=kinds, agent=owner)
+
+
+	def events_subscribe(self, kinds: list[str] = None, owner: str = None, **ignored: Any) -> dict[str, Any]:
+		"""Handle 'memory/events/subscribe' -- push, where the binding can carry it.
+
+		Args:
+			kinds (list[str], optional): Deliver only these kinds.
+			owner (str, optional): Scope the delivery.
+			**ignored: Unrecognised parameters are ignored.
+
+		Returns:
+			dict: {'subscribed': True}.
+
+		Raises:
+			JsonRpcError: -32003 when push is unavailable on this connection.
+		"""
+		if not (self.push_events and self.push_transport):
+			raise JsonRpcError(
+				CAPABILITY_NOT_SUPPORTED,
+				"Push is not available on this connection; poll memory/events instead",
+				{"push": False},
+			)
+
+		self._subscription = {"kinds": list(kinds) if kinds else None, "owner": owner}
+		return {"subscribed": True}
+
+
+	def events_unsubscribe(self, **ignored: Any) -> dict[str, Any]:
+		"""Handle 'memory/events/unsubscribe'. A no-op without a subscription.
+
+		Args:
+			**ignored: Unrecognised parameters are ignored.
+
+		Returns:
+			dict: {'subscribed': False}.
+		"""
+		self._subscription = None
+		return {"subscribed": False}
+
+
+	def take_notifications(self) -> list[dict[str, Any]]:
+		"""Drain the notifications queued for the connected client.
+
+		Returns:
+			list[dict]: Pending 'memory/event' notifications, oldest first.
+		"""
+		taken        = self._outbox
+		self._outbox = []
+		return taken
+
+
+	def _emit(self, kind: str, owner: str = None, **fields: Any) -> None:
+		"""Log an event, and queue it for push if anyone subscribed.
+
+		Args:
+			kind (str): The event kind.
+			owner (str, optional): The scope it belongs to.
+			**fields: Event payload. None values are dropped.
+		"""
+		event        = self.events_log.append(kind, owner=owner, **fields)
+		subscription = self._subscription
+
+		if subscription is None or not (self.push_events and self.push_transport):
+			return
+		if subscription["kinds"] and kind not in subscription["kinds"]:
+			return
+		if owner is not None and subscription["owner"] is not None and owner != subscription["owner"]:
+			return
+
+		self._outbox.append(make_notification("memory/event", event))
 
 
 	# ------------------------------------------------------------------ plumbing
@@ -420,6 +524,7 @@ class MemoryRouter:
 			"working"      : self.working(),
 			"limits"       : {"max_records_per_call": 256},
 			"embeddings"   : self._embedding_profile(),
+			"events"       : {"push": bool(self.push_events and self.push_transport)},
 			"total"        : sum(t["count"] for t in tiers),
 			"scorer"       : {"scorer": "router", "merge": self.merge.name,
 			                  "backends": {n: type(self.backends[n]).__name__ for n in self.order}},
@@ -508,6 +613,17 @@ class MemoryRouter:
 		written : dict[str, list[str]] = {}
 		for tier, batch in batches.items():
 			written[tier] = self._call(tier, "memory/remember", self._scoped({"records": batch}, owner)).get("ids", [])
+
+		for tier, index in order:
+			entry = batches[tier][index]
+			self._emit(
+				"written",
+				owner   = entry.get("owner") or owner,
+				id      = written[tier][index],
+				tier    = tier,
+				session = entry.get("session"),
+				key     = entry.get("key"),
+			)
 
 		return {"ids": [written[tier][index] for tier, index in order], "total": self._total()}
 
@@ -684,6 +800,8 @@ class MemoryRouter:
 
 			forgotten += self._call(name, "memory/forget", self._scoped(params, owner)).get("forgotten", 0)
 
+		if forgotten:
+			self._emit("forgotten", owner=owner, count=forgotten, ids=list(ids) if ids else None)
 		return {"forgotten": forgotten}
 
 
@@ -735,6 +853,8 @@ class MemoryRouter:
 			if group:
 				moved += self._move(group, name, tier, salience)
 
+		if moved:
+			self._emit("promoted", owner=owner, ids=list(ids or []), tier=tier)
 		return {"promoted": moved}
 
 
@@ -834,6 +954,7 @@ class MemoryRouter:
 			flushed += self._move(leaving, name, tier.spill_to)
 
 		report = self.consolidate()
+		self._emit("session_closed", owner=owner, session=session)
 		return dict(report, closed=session, flushed=flushed)
 
 
@@ -924,6 +1045,8 @@ class MemoryRouter:
 						dropped += self._call(name, "memory/forget",
 						                      {"ids": [r["id"] for r in group]}).get("forgotten", 0)
 
+		self._emit("consolidated", moved=moved, promoted=promoted, dropped=dropped, summarized=0)
+
 		return {
 			"moved"      : moved,
 			"dropped"    : dropped,
@@ -998,7 +1121,7 @@ def spawn_backends(
 		backends = spawn_backends("memories")
 		router   = MemoryRouter(backends, merge=RankFusion())
 		try:
-			serve_stdio(router.dispatcher)
+			serve_a2m_stdio(router)
 		finally:
 			for backend in backends.values():
 				backend.close()
@@ -1103,7 +1226,7 @@ def main() -> int:
 			print(f"A2M router ({merge}) on http://127.0.0.1:{port}/ over {len(backends)} backends", file=sys.stderr)
 			serve_a2m_http(router, port=port).serve_forever()
 		else:
-			serve_stdio(router.dispatcher)
+			serve_a2m_stdio(router)
 	finally:
 		for backend in backends.values():
 			backend.close()

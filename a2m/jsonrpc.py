@@ -303,7 +303,10 @@ class LocalTransport(Transport):
 		Args:
 			dispatcher (Dispatcher): The in-process server to dispatch into.
 		"""
-		self.dispatcher = dispatcher
+		self.dispatcher    = dispatcher
+		# Server-initiated notifications, delivered by callback since there is no
+		# byte stream to carry them (spec §8.1). A server that pushes appends here.
+		self.notifications : list[dict[str, Any]] = []
 
 
 	def send(self, payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -783,14 +786,44 @@ class Client:
 		self.transport.send(make_notification(method, params))
 
 
+	def take_notifications(self) -> list[dict[str, Any]]:
+		"""Drain the server-initiated notifications the transport has stashed.
+
+		A transport must not lose messages it did not expect (spec §8.2), so
+		notifications that arrive interleaved with responses accumulate on the
+		transport until someone asks for them. HTTP never carries any.
+
+		Returns:
+			list[dict]: The pending notification objects, oldest first. Empty for
+			a transport that has none, or cannot carry them at all.
+		"""
+		pending = getattr(self.transport, "notifications", None)
+		if not pending:
+			return []
+
+		taken = list(pending)
+		del pending[:len(taken)]
+		return taken
+
+
 	def close(self) -> None:
 		"""Close the underlying transport.
 		"""
 		self.transport.close()
 
 
-def serve_stdio(dispatcher: Dispatcher, stdin: TextIO = None, stdout: TextIO = None) -> None:
-	"""Server side of StdioTransport: read requests until the stream closes."""
+def serve_stdio(dispatcher: Dispatcher, stdin: TextIO = None, stdout: TextIO = None, drain: Callable = None) -> None:
+	"""Server side of StdioTransport: read requests until the stream closes.
+
+	Args:
+		dispatcher (Dispatcher): What answers the requests.
+		stdin (TextIO, optional): Where requests arrive. sys.stdin by default.
+		stdout (TextIO, optional): Where responses go. sys.stdout by default.
+		drain (Callable, optional): Called after each handled message; returns
+			pending server-initiated notification objects to write, each on its
+			own line after the response. This is the seam that carries push
+			events (spec §4.13) without the server ever holding the stream.
+	"""
 	stdin  = stdin  or sys.stdin
 	stdout = stdout or sys.stdout
 
@@ -809,3 +842,8 @@ def serve_stdio(dispatcher: Dispatcher, stdin: TextIO = None, stdout: TextIO = N
 		if response is not None:
 			stdout.write(json.dumps(response) + "\n")
 			stdout.flush()
+
+		if drain is not None:
+			for notification in drain():
+				stdout.write(json.dumps(notification) + "\n")
+				stdout.flush()

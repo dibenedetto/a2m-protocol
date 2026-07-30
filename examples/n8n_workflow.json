@@ -1,0 +1,115 @@
+{
+	"name": "A2M shared memory",
+	"meta": {
+		"description": "n8n against an A2M server, with no custom node: the protocol is one JSON-RPC POST, so the stock HTTP Request node is the whole integration. Start a server first: python -m implementations.store_sqlite memory.db --http 8778 (from the a2m-protocol repository root). Every agent framework pointed at the same server shares what this workflow writes."
+	},
+	"nodes": [
+		{
+			"id": "note-how-to-run",
+			"name": "How to run this",
+			"type": "n8n-nodes-base.stickyNote",
+			"typeVersion": 1,
+			"position": [-60, -180],
+			"parameters": {
+				"width": 620,
+				"height": 140,
+				"content": "## A2M — Agent-to-Memory Protocol\nStart a memory server, then execute the workflow:\n\n`python -m implementations.store_sqlite memory.db --http 8778`\n\nThe three nodes are plain HTTP Request nodes speaking JSON-RPC 2.0 — n8n needs no custom node to share memory with LangChain, Agno, CrewAI or AutoGen agents on the same store. Spec: https://a2m-protocol.org"
+			}
+		},
+		{
+			"id": "trigger",
+			"name": "Run",
+			"type": "n8n-nodes-base.manualTrigger",
+			"typeVersion": 1,
+			"position": [-40, 40],
+			"parameters": {}
+		},
+		{
+			"id": "describe",
+			"name": "Describe the server",
+			"type": "n8n-nodes-base.httpRequest",
+			"typeVersion": 4.2,
+			"position": [180, 40],
+			"parameters": {
+				"method": "POST",
+				"url": "http://127.0.0.1:8778/",
+				"sendHeaders": true,
+				"headerParameters": {
+					"parameters": [
+						{ "name": "A2M-Protocol-Version", "value": "a2m/0.1" }
+					]
+				},
+				"sendBody": true,
+				"specifyBody": "json",
+				"jsonBody": "{\n\t\"jsonrpc\": \"2.0\",\n\t\"id\": 1,\n\t\"method\": \"memory/describe\",\n\t\"params\": { \"protocol\": \"a2m/0.1\" }\n}"
+			}
+		},
+		{
+			"id": "remember",
+			"name": "Remember a fact",
+			"type": "n8n-nodes-base.httpRequest",
+			"typeVersion": 4.2,
+			"position": [400, 40],
+			"parameters": {
+				"method": "POST",
+				"url": "http://127.0.0.1:8778/",
+				"sendHeaders": true,
+				"headerParameters": {
+					"parameters": [
+						{ "name": "A2M-Protocol-Version", "value": "a2m/0.1" }
+					]
+				},
+				"sendBody": true,
+				"specifyBody": "json",
+				"jsonBody": "{\n\t\"jsonrpc\": \"2.0\",\n\t\"id\": 2,\n\t\"method\": \"memory/remember\",\n\t\"params\": {\n\t\t\"records\": [\n\t\t\t{\n\t\t\t\t\"content\": \"the deploy key rotates every ninety days\",\n\t\t\t\t\"tier\": \"semantic\",\n\t\t\t\t\"metadata\": { \"source\": \"n8n\", \"workflow\": \"a2m-demo\" }\n\t\t\t}\n\t\t]\n\t}\n}"
+			}
+		},
+		{
+			"id": "recall",
+			"name": "Recall it by meaning",
+			"type": "n8n-nodes-base.httpRequest",
+			"typeVersion": 4.2,
+			"position": [620, 40],
+			"parameters": {
+				"method": "POST",
+				"url": "http://127.0.0.1:8778/",
+				"sendHeaders": true,
+				"headerParameters": {
+					"parameters": [
+						{ "name": "A2M-Protocol-Version", "value": "a2m/0.1" }
+					]
+				},
+				"sendBody": true,
+				"specifyBody": "json",
+				"jsonBody": "{\n\t\"jsonrpc\": \"2.0\",\n\t\"id\": 3,\n\t\"method\": \"memory/recall\",\n\t\"params\": {\n\t\t\"query\": \"how often does the key change?\",\n\t\t\"limit\": 3\n\t}\n}"
+			}
+		},
+		{
+			"id": "answers",
+			"name": "The records",
+			"type": "n8n-nodes-base.set",
+			"typeVersion": 3.4,
+			"position": [840, 40],
+			"parameters": {
+				"mode": "raw",
+				"jsonOutput": "={{ { \"records\": $json.result.records } }}"
+			}
+		}
+	],
+	"connections": {
+		"Run": {
+			"main": [[ { "node": "Describe the server", "type": "main", "index": 0 } ]]
+		},
+		"Describe the server": {
+			"main": [[ { "node": "Remember a fact", "type": "main", "index": 0 } ]]
+		},
+		"Remember a fact": {
+			"main": [[ { "node": "Recall it by meaning", "type": "main", "index": 0 } ]]
+		},
+		"Recall it by meaning": {
+			"main": [[ { "node": "The records", "type": "main", "index": 0 } ]]
+		}
+	},
+	"pinData": {},
+	"settings": { "executionOrder": "v1" }
+}

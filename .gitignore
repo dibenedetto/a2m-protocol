@@ -8,6 +8,9 @@ __pycache__/
 # repository whose point is that it needs none of them.
 uv.lock
 
+# Build artifacts
+dist/
+
 # Sample-store artifacts
 *.db
 *.db-wal

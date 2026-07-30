@@ -25,8 +25,23 @@ embed     = ["ollama"]
 # conformance target and both demos.
 langchain = ["langchain-core>=0.3"]
 agno      = ["agno>=2.0"]
+crewai    = ["crewai>=0.100"]
+autogen   = ["autogen-core>=0.4"]
 
 [project.urls]
 Homepage      = "https://a2m-protocol.org"
 Specification = "https://github.com/dibenedetto/a2m-protocol/blob/main/spec/a2m-0.1.md"
 Source        = "https://github.com/dibenedetto/a2m-protocol"
+
+[build-system]
+requires      = ["hatchling"]
+build-backend = "hatchling.build"
+
+# The wheel ships the library and nothing else. `implementations/` and `tools/`
+# are the specification implemented and judged -- they belong to the checkout,
+# where their import rules (nothing, or a2m only) are part of the argument.
+[tool.hatch.build.targets.wheel]
+packages = ["a2m"]
+
+[tool.hatch.build.targets.sdist]
+include = ["a2m", "spec", "implementations", "tools", "examples", "README.md", "DECISIONS.md", "LICENSE"]

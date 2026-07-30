@@ -368,6 +368,11 @@ convenient one.
 
 ## 020 — `events` is deferred to 0.2, and its name reserved
 
+> **Superseded by 026.** The deferral was correct when made and its reasoning
+> below still explains the shape 026 has: every question this entry said 0.2
+> would have to answer is answered there, and the wire shape it refused to
+> ship unproven now has conformance checks against every implementation.
+
 **Decision.** Drop the `events` capability from 0.1. The name is **reserved** in
 §9.1 as a candidate for 0.2, and a 0.1 server **MUST NOT** declare it.
 
@@ -674,3 +679,129 @@ Pointing four backends at one PostgreSQL database surfaced a second real bug —
 backends building the shared `durable` table collided on its sequence. Schema
 creation now holds an advisory lock, which fixes it for any startup order rather
 than only for the one the router happens to use.
+
+---
+
+## 026 — `events` lands in 0.1: a cursor that polls, a push that is optional
+
+**Decision.** The `events` capability is specified and shipped (spec
+§4.12–§4.14), superseding 020. One log, two reads: `memory/events` walks it
+with an opaque cursor on any transport, and `memory/events/subscribe` mirrors
+it as JSON-RPC notifications on the transports that can carry one — stdio and
+in-process, never HTTP. Push is opt-in per connection and declared per
+connection: `describe` reports `events.push` honestly for the binding the
+client is actually on.
+
+**Why amending 0.1 was still allowed.** The spec is unpublished, so amending in
+place is free — a freedom that ends at announcement. 020's objection was never
+"events is wrong"; it was that the drafted wire shape could not be exercised by
+any implementation, in a repository whose whole discipline is that unexercised
+wire shapes do not ship. The objection is answered by implementation rather
+than overruled: every conformance target now runs the poll checks, and the
+stdio targets run push end to end.
+
+**How 020's four questions came out.**
+
+- **Scoping** — recall's rules, exactly (§6). An event is delivered only to a
+  caller who could have recalled the record it describes; over a network the
+  scope comes from the authenticated principal. This was the question with
+  teeth: an event channel that broadcasts turns `owner` from partitioning into
+  a leak, because agent B learns *that* and *when* agent A writes even without
+  reading what.
+- **Subscription** — polling needs none (the cursor *is* the subscription, and
+  the server holds no per-client state for it); push is explicit opt-in per
+  connection, gone when the connection is.
+- **Volume** — answered by coalescing, normatively. A consolidation moving ten
+  thousand records is **one** event carrying counts; a forget is one event.
+  Only `written` is per-record, because a write is what a watcher most often
+  acts on record by record.
+- **Ordering** — polling dissolves it: events arrive inside an ordinary
+  response, already ordered, exactly once per retained event. For push, a
+  notification is a complete message that may interleave *between* responses,
+  never inside one — which the stdio framing already guaranteed (§8.2) and
+  clients already tolerated.
+
+**Why a cursor rather than only push.** No binding in §8 carries a
+server-initiated message on every transport, and 021 forbids inventing one.
+A cursor poll works identically on all three bindings, is testable by a suite
+that speaks only the protocol, and gives push a fallback semantics for free:
+push and poll are two views of one log, so a client that misses a
+notification can always catch up with the cursor. Push alone has no such
+recovery — miss one notification and the store must be re-read entire.
+
+**The cursor is opaque, and enforced opaque.** It encodes a per-log salt, so a
+cursor from another server — or a previous run of this one — fails the check
+and is answered with `reset: true` and the oldest retained events, rather than
+misread as a position. `reset` is the honest signal that events may have been
+missed; silence there would be the watcher-shaped version of the stale-fact
+problem 017 fixed.
+
+**The log is bounded, so declaring is safe.** A server retains a fixed window
+(1024 events in the reference); an abandoned cursor costs nothing and expires
+into `reset`. An unbounded log would make `events` a capability only servers
+with garbage collection could afford, which is the 001 mistake in a new place.
+
+**Where the log lives, and why the router has its own.** In the reference it is
+server-layer state (`EventLog` in protocol.py), not stack state: every
+mutation flows through the server's handlers, so SQLite and PostgreSQL servers
+inherit events without a storage change, and a restart empties the log — which
+is correct, because a cursor is valid only on the server that issued it. The
+federation router keeps its own log for the same reason it keeps its own
+scores (§5.3): folding four backend cursors into one composite would break the
+moment any backend restarts, and every write already passes through the
+router.
+
+**Cost, accepted.** Poll latency is the poll interval, and a restarted server
+resets every watcher. Both are the price of a design with no server-initiated
+requests and no persistent subscription state, and both have the same remedy:
+the cursor makes catching up cheap.
+
+---
+
+## 027 — A2M is not an MCP tool server, and the bridge is the argument
+
+**Context.** The first question an informed reader asks: memory servers
+already ship as MCP tools — why a second protocol? The answer was implicit
+across 001, 007, 013, 018 and 021; nothing stated it. Now
+[implementations/bridge_mcp.py](implementations/bridge_mcp.py) states it as a
+program: a stdlib-only MCP server whose tools are any A2M server, which makes
+every MCP client an A2M client *and* makes visible exactly what the flattening
+costs.
+
+**Decision.** A2M stays a protocol beside MCP rather than a tool schema inside
+it, and ships the bridge for the runtimes that already speak MCP.
+
+**Why not tools all the way down.** `tools/call` returns text for a model to
+read. That is the right shape for a model-facing surface and the wrong one for
+an infrastructure seam:
+
+- **Records stop being typed.** Behind a tool result, `metadata`
+  round-tripping, id opacity, RFC 3339 timestamps (003) and verbatim
+  embeddings (018) are conventions in prose. Nothing can conformance-test a
+  paragraph. A2M's rules are load-bearing precisely because a *program* — a
+  store, a router, another framework — is on the consuming end, not a model.
+- **Negotiation stops being checkable.** A2M's capability model is
+  first-class: `describe` declares, undeclared answers `-32003` (002), and a
+  client can be written against that contract. Tool lists are per-server
+  vocabulary — two memory MCP servers already disagree on tool names and
+  argument shapes, which is the silo A2M exists to remove, rebuilt one layer
+  up.
+- **The tier semantics vanish.** `timeline` versus `recall` — replay versus
+  search (007) — survives flattening only as a sentence in a tool description
+  that nothing enforces. A framework adapter can build on the distinction; a
+  tool description can only hope the model reads it.
+
+**Why the bridge is cheap, and why that is the point.** 021 aligned A2M's
+bindings with MCP's — same JSON-RPC, same stdio framing, no batches — so the
+bridge is a method table, not a translation layer. That is the intended
+relationship: MCP is how a *model* reaches capabilities; A2M is how *agent
+infrastructure* shares memory underneath. An MCP runtime adopts A2M for the
+cost of a namespace, and an A2M store reaches every MCP client through one
+process in between.
+
+**The tools are derived, not declared.** `build_tools` gates each tool on the
+A2M server's declared capabilities, so A2M's negotiation surfaces through
+MCP's `tools/list`: a core-only store simply has no `memory_fetch` tool. The
+bridge deliberately has no reverse twin — an MCP *client* adapter exposing
+`tools/call` as an A2M server would put a store behind the flattening above,
+and a store is exactly what must not live there.

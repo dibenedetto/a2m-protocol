@@ -40,7 +40,7 @@ import sys
 from   typing                import Any, Callable
 
 
-from   a2m                   import A2M_VERSION, MemoryServer, serve_a2m_http, serve_stdio
+from   a2m                   import A2M_VERSION, MemoryServer, serve_a2m_http, serve_a2m_stdio
 from   a2m.memory            import MemoryRecord, MemoryTier, recency
 from   a2m.retrieval         import cosine
 from   implementations.store import TierStore, TieredMemoryStack, pack, single_tier, unpack
@@ -776,7 +776,7 @@ def open_stack(path: str = "memory.db", embed: Callable = None, **kwargs) -> Sql
 
 		stack  = open_stack("memory.db", embed=ollama_embedder())
 		server = MemoryServer(stack)
-		serve_stdio(server.dispatcher)
+		serve_a2m_stdio(server)
 	"""
 	return SqliteMemoryStack(path=path, embed=embed, **kwargs)
 
@@ -816,7 +816,7 @@ def main() -> int:
 		print(f"A2M {A2M_VERSION} on http://127.0.0.1:{port}/ backed by {path}", file=sys.stderr)
 		serve_a2m_http(server, port=port).serve_forever()
 	else:
-		serve_stdio(server.dispatcher)
+		serve_a2m_stdio(server)
 
 	return 0
 

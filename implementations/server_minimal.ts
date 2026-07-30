@@ -1,5 +1,5 @@
 /**
- * A minimal A2M 0.1 server in TypeScript, declaring `core` and nothing else.
+ * A minimal A2M 0.1 server in TypeScript, declaring `core` and `keys`.
  *
  *     node --experimental-strip-types implementations/server_minimal.ts        # stdio
  *
@@ -25,16 +25,22 @@
  * - **`id` is opaque and its type must survive** (spec §3.2). JSON-RPC ids may be
  *   strings or numbers, and JavaScript is happy to coerce between them. An id is
  *   echoed back exactly as it arrived, never normalised.
+ *
+ * `keys` is declared as well as `core`, so the port also demonstrates an
+ * *optional* capability surviving the language change: a write to an occupied
+ * key replaces what is there — same id, new content, `revision` + 1 — which is
+ * what makes a memory correctable rather than merely appendable (spec §3.6).
  */
 
 const PROTOCOL = "a2m/0.1";
-const CAPABILITIES = ["core"];
+const CAPABILITIES = ["core", "keys"];
 const METHODS = [
 	"memory/describe",
 	"memory/remember",
 	"memory/recall",
 	"memory/timeline",
 	"memory/forget",
+	"memory/fetch",
 ];
 
 // spec §7
@@ -57,6 +63,8 @@ interface Stored {
 	role: string;
 	metadata: Record<string, Json>;
 	group?: string;
+	key?: string;
+	revision: number;
 	created_at: string;
 	sequence: number;
 }
@@ -129,8 +137,28 @@ function pub(record: Stored, score?: number): Json {
 		metadata: record.metadata,
 	};
 	if (record.group) out.group = record.group;
+	if (record.key !== undefined) {
+		out.key = record.key;
+		out.revision = record.revision;
+	}
 	if (score !== undefined) out.score = score;
 	return out;
+}
+
+
+/** The record at a key, if any. Keys are unique within this store's single scope. */
+function byKey(key: string): Stored | undefined {
+	for (const record of RECORDS.values()) {
+		if (record.key === key) return record;
+	}
+	return undefined;
+}
+
+
+/** Whether a record's key sits at or under a prefix (spec §3.6). */
+function underPrefix(record: Stored, prefix: Json): boolean {
+	if (prefix === undefined || prefix === null || prefix === "") return true;
+	return record.key !== undefined && record.key.startsWith(String(prefix));
 }
 
 /** Handle `memory/describe`. Throws -32007 on an incompatible version. */
@@ -172,7 +200,6 @@ function remember(params: Json): Json {
 
 		for (const [field, capability] of [
 			["tier", "tiers"],
-			["key", "keys"],
 			["embedding", "embeddings"],
 			["uri", "external"],
 		]) {
@@ -192,6 +219,21 @@ function remember(params: Json): Json {
 			continue;
 		}
 
+		// spec §3.6 -- a key addresses a fact, so writing to an occupied key
+		// replaces what is there: same id, new content, revision + 1. The stale
+		// fact must stop being recallable, not merely be outnumbered.
+		if (entry.key !== undefined && entry.key !== null) {
+			const held = byKey(String(entry.key));
+			if (held !== undefined) {
+				held.content = entry.content;
+				held.role = entry.role ?? held.role;
+				if (entry.metadata !== undefined) held.metadata = entry.metadata;
+				held.revision += 1;
+				ids.push(held.id);
+				continue;
+			}
+		}
+
 		const id = supplied !== undefined && supplied !== null ? String(supplied) : crypto.randomUUID().replace(/-/g, "");
 
 		RECORDS.set(id, {
@@ -200,6 +242,8 @@ function remember(params: Json): Json {
 			role: entry.role ?? "user",
 			metadata: entry.metadata ?? {},
 			group: entry.group ?? undefined,
+			key: entry.key !== undefined && entry.key !== null ? String(entry.key) : undefined,
+			revision: 0,
 			created_at: nowRfc3339(),
 			sequence: RECORDS.size,
 		});
@@ -214,7 +258,6 @@ function recall(params: Json): Json {
 	for (const [field, capability] of [
 		["tier", "tiers"],
 		["embedding", "embeddings"],
-		["key_prefix", "keys"],
 	]) {
 		if (params[field] !== undefined && params[field] !== null) {
 			throw new A2MError(
@@ -227,7 +270,9 @@ function recall(params: Json): Json {
 	const limit = params.limit ?? 8;
 	const minScore = params.min_score ?? 0.0;
 
-	const candidates = [...RECORDS.values()].filter((record) => matches(record, params.where));
+	const candidates = [...RECORDS.values()]
+		.filter((record) => matches(record, params.where))
+		.filter((record) => underPrefix(record, params.key_prefix));
 	const wanted = params.query ? terms(params.query) : new Set<string>();
 
 	let scored: Array<[Stored, number]> = [];
@@ -259,7 +304,10 @@ function timeline(params: Json): Json {
 		throw new A2MError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'tiers' capability");
 	}
 
-	let ordered = [...RECORDS.values()].sort((a, b) => a.sequence - b.sequence);
+	let ordered = [...RECORDS.values()]
+		.filter((record) => matches(record, params.where))
+		.filter((record) => underPrefix(record, params.key_prefix))
+		.sort((a, b) => a.sequence - b.sequence);
 
 	const limit = params.limit ?? 0;
 	if (limit > 0) ordered = ordered.slice(-limit);
@@ -273,10 +321,10 @@ function forget(params: Json): Json {
 		throw new A2MError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'tiers' capability");
 	}
 
-	const { ids, query, where } = params;
+	const { ids, query, where, key_prefix } = params;
 
-	if (!ids && !query && !where) {
-		throw new A2MError(INVALID_PARAMS, "Pass ids, query or where; refusing to forget everything");
+	if (!ids && !query && !where && !key_prefix) {
+		throw new A2MError(INVALID_PARAMS, "Pass ids, query, where or key_prefix; refusing to forget everything");
 	}
 
 	const doomed = new Set<string>();
@@ -288,14 +336,32 @@ function forget(params: Json): Json {
 	}
 
 	if (query || where) {
-		for (const record of recall({ query, where, limit: 0 }).records) {
+		for (const record of recall({ query, where, key_prefix, limit: 0 }).records) {
 			doomed.add(record.id);
+		}
+	}
+
+	if (key_prefix && !query && !where) {
+		for (const record of RECORDS.values()) {
+			if (underPrefix(record, key_prefix)) doomed.add(record.id);
 		}
 	}
 
 	for (const id of doomed) RECORDS.delete(id);
 
 	return { forgotten: doomed.size };
+}
+
+
+/** Handle `memory/fetch`. An unused key is `{record: null}`, never an error (spec §4.9). */
+function fetch(params: Json): Json {
+	const key = params.key;
+	if (key === undefined || key === null || key === "") {
+		throw new A2MError(INVALID_PARAMS, "'key' is required");
+	}
+
+	const held = byKey(String(key));
+	return { record: held !== undefined ? pub(held) : null };
 }
 
 /**
@@ -326,7 +392,10 @@ const HANDLERS: Record<string, (params: Json) => Json> = {
 	"memory/reinforce": unsupported("salience"),
 	"memory/session/list": unsupported("sessions"),
 	"memory/session/close": unsupported("sessions"),
-	"memory/fetch": unsupported("keys"),
+	"memory/fetch": fetch,
+	"memory/events": unsupported("events"),
+	"memory/events/subscribe": unsupported("events"),
+	"memory/events/unsubscribe": unsupported("events"),
 };
 
 /** Build a JSON-RPC error response. */

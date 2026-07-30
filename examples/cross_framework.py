@@ -31,8 +31,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from implementations import client as a2m_client
 
 
-from   adapters.agno           import A2MVectorDb
-from   adapters.langchain      import A2MChatMessageHistory, A2MRetriever
+from   implementations.adapters.agno      import A2MVectorDb
+from   implementations.adapters.langchain import A2MChatMessageHistory, A2MRetriever
 from   agno.knowledge.document import Document
 from   langchain_core.messages import AIMessage
 

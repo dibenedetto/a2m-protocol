@@ -29,18 +29,23 @@ written from the specification alone and implements exactly that.
 
 
 import inspect
+import json
+import os
 import sys
+import threading
+import time
 
 
+from   collections import deque
 from   typing      import Any, Callable
 
 
 from   a2m.jsonrpc import (
 	Client, Dispatcher, INVALID_PARAMS, JsonRpcError,
 	HttpTransport, LocalTransport, StdioTransport, make_error_response,
-	serve_http, serve_stdio,
+	make_notification, serve_http, serve_stdio,
 )
-from   a2m.memory  import MemoryStack
+from   a2m.memory  import MemoryStack, to_rfc3339
 
 
 A2M_VERSION = "a2m/0.1"
@@ -74,9 +79,149 @@ A2M_CAPABILITIES = {
 	"embeddings" : [],
 	"keys"       : ["memory/fetch"],
 	"external"   : [],
+	"events"     : ["memory/events", "memory/events/subscribe", "memory/events/unsubscribe"],
 }
 
 A2M_METHODS = [method for methods in A2M_CAPABILITIES.values() for method in methods]
+
+# The one server-to-client message in the protocol: an event, pushed after
+# memory/events/subscribe. A notification, never a request (spec §4.13, §8).
+A2M_EVENT_NOTIFICATION = "memory/event"
+
+
+class EventLog:
+	"""A bounded, in-memory event log with opaque cursors (spec §4.12).
+
+	The log is the single source both delivery modes read from: polling walks it
+	with a cursor, push mirrors appends to a subscriber. Bounding it is what
+	makes `events` safe to declare on any server — an unpolled log costs a fixed
+	amount of memory, never an unbounded one.
+
+	A cursor encodes a per-log salt plus a sequence number. The salt is what
+	makes it *opaque in practice*, not only by decree: a cursor from another
+	server, or from a previous run of this one, fails the salt check and is
+	answered with `reset` rather than misread as a position.
+
+	Example:
+		>>> log = EventLog(retain=2)
+		>>> start = log.head()
+		>>> _ = log.append("written", id="a")
+		>>> _ = log.append("written", id="b")
+		>>> [e["id"] for e in log.read(cursor=start)["events"]]
+		['a', 'b']
+	"""
+
+	def __init__(self, retain: int = 1024) -> None:
+		"""Create an empty log.
+
+		Args:
+			retain (int, optional): How many events to keep. Older events fall
+				off, and a cursor pointing before them answers with `reset`.
+		"""
+		self.retain  = int(retain)
+		self._salt   = os.urandom(4).hex()
+		self._events : deque = deque(maxlen=self.retain)
+		self._seq    = 0
+		self._lock   = threading.Lock()
+
+
+	def append(self, kind: str, owner: str = None, **fields: Any) -> dict[str, Any]:
+		"""Record one event.
+
+		Args:
+			kind (str): written, forgotten, promoted, consolidated,
+				session_closed, or anything else — clients must tolerate kinds
+				they do not recognise.
+			owner (str, optional): The scope the event belongs to. Scoped reads
+				see only their own events plus unscoped ones, mirroring recall
+				visibility (spec §4.12); the owner itself is not exposed on the
+				wire.
+			**fields: Event payload. None values are dropped.
+
+		Returns:
+			dict: The event as it will appear on the wire, with `at` stamped.
+		"""
+		event = {"kind": kind, "at": to_rfc3339(time.time())}
+		event.update({name: value for name, value in fields.items() if value is not None})
+
+		with self._lock:
+			self._seq += 1
+			self._events.append((self._seq, owner, event))
+
+		return event
+
+
+	def head(self) -> str:
+		"""The cursor for "now": a poll from here returns nothing yet.
+
+		Returns:
+			str: An opaque cursor.
+		"""
+		with self._lock:
+			return f"{self._salt}:{self._seq}"
+
+
+	def read(self, cursor: str = None, limit: int = 256, kinds: list[str] = None, agent: str = None) -> dict[str, Any]:
+		"""Read events after a cursor, oldest first (spec §4.12).
+
+		Successive reads, each passing the cursor the previous one returned, see
+		every retained event exactly once, in order. A cursor this log did not
+		issue — another server's, or a previous run's — comes back with `reset`
+		set and the read continuing from the oldest retained event, which is
+		also what happens when a valid cursor has fallen off the retention
+		window.
+
+		Args:
+			cursor (str, optional): Where to read from. Absent means now: no
+				events, just the current cursor.
+			limit (int, optional): Maximum events to return. 0 means no limit.
+			kinds (list[str], optional): Keep only these kinds.
+			agent (str, optional): Scope. A scoped read sees its own events and
+				unscoped ones; an unscoped read sees everything.
+
+		Returns:
+			dict: `events` and `cursor`, plus `more` and `reset` when true.
+		"""
+		with self._lock:
+			if cursor is None:
+				return {"events": [], "cursor": f"{self._salt}:{self._seq}"}
+
+			salt, _, seq_text = str(cursor).partition(":")
+			oldest            = self._events[0][0] if self._events else self._seq + 1
+			reset             = False
+
+			if salt != self._salt or not seq_text.isdigit():
+				reset = True
+				since = oldest - 1
+			else:
+				since = min(int(seq_text), self._seq)
+				if since < oldest - 1:
+					reset = True
+					since = oldest - 1
+
+			selected = []
+			more     = False
+			for seq, owner, event in self._events:
+				if seq <= since:
+					continue
+				if agent is not None and owner is not None and owner != agent:
+					continue
+				if kinds and event["kind"] not in kinds:
+					continue
+				if limit and len(selected) >= limit:
+					more = True
+					break
+				selected.append((seq, event))
+
+			# When the walk completed, the cursor jumps to the head so events
+			# this reader filtered out are never offered to it again.
+			position = selected[-1][0] if more and selected else self._seq
+			result   = {"events": [event for _, event in selected], "cursor": f"{self._salt}:{position}"}
+			if more:
+				result["more"] = True
+			if reset:
+				result["reset"] = True
+			return result
 
 
 class MemoryServer:
@@ -101,6 +246,8 @@ class MemoryServer:
 		max_records_per_call : int         = 256,
 		dimensions           : int         = None,
 		embedding_model      : str         = None,
+		push_events          : bool        = True,
+		event_retention      : int         = 1024,
 	) -> None:
 		"""Wrap a store as an A2M server.
 
@@ -113,6 +260,12 @@ class MemoryServer:
 				salience stays conformant. Defaults to everything.
 			max_records_per_call (int, optional): Batch limit enforced on remember,
 				reported to clients under 'limits'.
+			push_events (bool, optional): Whether this server is willing to push
+				events after memory/events/subscribe. Even when True, push is only
+				reported on a binding that can deliver a notification — the
+				serving wiring sets `push_transport`, and HTTP never does
+				(spec §4.13). Polling is unaffected either way.
+			event_retention (int, optional): How many events the poll log keeps.
 
 		Raises:
 			ValueError: If 'core' is not among the capabilities. Every A2M server
@@ -124,9 +277,18 @@ class MemoryServer:
 		self.max_records_per_call = int(max_records_per_call)
 		self.dimensions           = dimensions
 		self.embedding_model      = embedding_model
+		self.push_events          = bool(push_events)
+		self.events_log           = EventLog(retain=event_retention)
 		# A2M messages are single objects: a batch has no id to bind a response to,
 		# and nothing in the protocol needs one (spec §8).
 		self.dispatcher           = Dispatcher(allow_batch=False)
+
+		# Set True by a binding that can carry a notification back to the client:
+		# serve_a2m_stdio and connect_local do, serve_a2m_http never does.
+		self.push_transport       = False
+		self._subscription        = None
+		self._notify_sink         = None
+		self._outbox              : list[dict[str, Any]] = []
 
 		if "core" not in self.capabilities:
 			raise ValueError("An A2M server must implement the 'core' capability")
@@ -145,6 +307,9 @@ class MemoryServer:
 			"memory/session/list": self.session_list,
 			"memory/session/close": self.session_close,
 			"memory/fetch"       : self.fetch,
+			"memory/events"      : self.events,
+			"memory/events/subscribe"  : self.events_subscribe,
+			"memory/events/unsubscribe": self.events_unsubscribe,
 		}
 
 		# Every A2M method is registered, including those of undeclared
@@ -237,6 +402,7 @@ class MemoryServer:
 			"tiers"        : described.get("tiers", []),
 			"limits"       : {"max_records_per_call": self.max_records_per_call},
 			"embeddings"   : self._embedding_profile() if self.supports("embeddings") else None,
+			"events"       : {"push": self._push_available()} if self.supports("events") else None,
 			"scorer"       : described.get("scorer", None),
 			"total"        : described.get("total", 0),
 			"working"      : described.get("working", None),
@@ -322,6 +488,17 @@ class MemoryServer:
 
 			written.append(stored)
 
+		for stored in written:
+			self._emit(
+				"written",
+				owner    = stored.owner,
+				id       = stored.id,
+				tier     = stored.tier,
+				session  = stored.session,
+				key      = stored.key,
+				revision = stored.revision if getattr(stored, "key", None) else None,
+			)
+
 		return {"ids": [r.id for r in written], "tier": written[-1].tier, "total": self.stack.count()}
 
 
@@ -396,9 +573,6 @@ class MemoryServer:
 		Returns:
 			dict: 'records', ascending by created_at.
 		"""
-	def timeline(self, tier: str = None, limit: int = 0, owner: str = None,
-	             where: dict[str, Any] = None, key_prefix: str = None,
-	             embeddings: bool = False, **ignored: Any) -> dict[str, Any]:
 		if key_prefix is not None and not self.supports("keys"):
 			raise JsonRpcError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'keys' capability")
 
@@ -439,9 +613,13 @@ class MemoryServer:
 			JsonRpcError: -32002 for an unknown tier.
 		"""
 		try:
-			return {"promoted": self.stack.promote(ids, tier, salience)}
+			promoted = self.stack.promote(ids, tier, salience)
 		except KeyError as exc:
 			raise JsonRpcError(UNKNOWN_TIER, str(exc))
+
+		if promoted:
+			self._emit("promoted", owner=owner, ids=list(ids), tier=tier)
+		return {"promoted": promoted}
 
 
 	def forget(
@@ -477,8 +655,11 @@ class MemoryServer:
 		if key_prefix is not None and not self.supports("keys"):
 			raise JsonRpcError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'keys' capability")
 
-		return {"forgotten": self.stack.forget(ids=ids, query=query, tier=tier, where=where,
-		                                       agent=owner, key_prefix=key_prefix)}
+		forgotten = self.stack.forget(ids=ids, query=query, tier=tier, where=where,
+		                              agent=owner, key_prefix=key_prefix)
+		if forgotten:
+			self._emit("forgotten", owner=owner, count=forgotten, ids=list(ids) if ids else None)
+		return {"forgotten": forgotten}
 
 
 	def session_list(self, owner: str = None, **ignored: Any) -> dict[str, Any]:
@@ -514,7 +695,21 @@ class MemoryServer:
 		"""
 		if not session:
 			raise JsonRpcError(INVALID_PARAMS, "'session' is required")
-		return self.stack.close_session(session, agent=owner)
+
+		closed = self.stack.close_session(session, agent=owner)
+
+		# One coalesced event for the reorganisation, one for the closure —
+		# never one per record (spec §4.12).
+		self._emit(
+			"consolidated",
+			owner      = owner,
+			moved      = closed.get("moved"     , None),
+			promoted   = closed.get("promoted"  , None),
+			dropped    = closed.get("dropped"   , None),
+			summarized = closed.get("summarized", None),
+		)
+		self._emit("session_closed", owner=owner, session=session)
+		return closed
 
 
 	def fetch(self, key: str, owner: str = None, embeddings: bool = False, **ignored: Any) -> dict[str, Any]:
@@ -600,7 +795,139 @@ class MemoryServer:
 		Returns:
 			dict: moved, dropped, summarized, promoted and per-tier counts.
 		"""
-		return self.stack.consolidate()
+		report = self.stack.consolidate()
+		self._emit(
+			"consolidated",
+			moved      = report.get("moved"     , None),
+			promoted   = report.get("promoted"  , None),
+			dropped    = report.get("dropped"   , None),
+			summarized = report.get("summarized", None),
+		)
+		return report
+
+
+	def events(self, cursor: str = None, limit: int = 256, kinds: list[str] = None,
+	           owner: str = None, **ignored: Any) -> dict[str, Any]:
+		"""Handle 'memory/events' -- read what changed since a cursor.
+
+		Args:
+			cursor (str, optional): Where to read from. Absent means now: no
+				events, just the current cursor to poll from next.
+			limit (int, optional): Maximum events to return.
+			kinds (list[str], optional): Keep only these event kinds.
+			owner (str, optional): Scope. A scoped caller sees its own events and
+				unscoped ones, mirroring recall visibility (spec §4.12).
+			**ignored: Unrecognised parameters are ignored.
+
+		Returns:
+			dict: 'events' (oldest first) and 'cursor', plus 'more' and 'reset'
+			when true.
+		"""
+		return self.events_log.read(cursor=cursor, limit=limit, kinds=kinds, agent=owner)
+
+
+	def events_subscribe(self, kinds: list[str] = None, owner: str = None, **ignored: Any) -> dict[str, Any]:
+		"""Handle 'memory/events/subscribe' -- start pushing events.
+
+		Args:
+			kinds (list[str], optional): Deliver only these event kinds.
+			owner (str, optional): Scope the delivery, as for memory/events.
+			**ignored: Unrecognised parameters are ignored.
+
+		Returns:
+			dict: {'subscribed': True}.
+
+		Raises:
+			JsonRpcError: -32003 when push is unavailable -- disabled at setup,
+				or a binding that cannot carry a notification back, which is
+				every HTTP connection (spec §4.13).
+		"""
+		if not self._push_available():
+			raise JsonRpcError(
+				CAPABILITY_NOT_SUPPORTED,
+				"Push is not available on this connection; poll memory/events instead",
+				{"push": False},
+			)
+
+		self._subscription = {"kinds": list(kinds) if kinds else None, "owner": owner}
+		return {"subscribed": True}
+
+
+	def events_unsubscribe(self, **ignored: Any) -> dict[str, Any]:
+		"""Handle 'memory/events/unsubscribe' -- stop pushing events.
+
+		Unsubscribing without a subscription is a no-op, not an error.
+
+		Args:
+			**ignored: Unrecognised parameters are ignored.
+
+		Returns:
+			dict: {'subscribed': False}.
+		"""
+		self._subscription = None
+		return {"subscribed": False}
+
+
+	def take_notifications(self) -> list[dict[str, Any]]:
+		"""Drain the notifications queued for the connected client.
+
+		The stdio binding calls this after every handled message and writes each
+		one as its own line -- which is what keeps a notification a whole
+		message that can interleave *between* responses but never inside one.
+
+		Returns:
+			list[dict]: Pending 'memory/event' notification objects, oldest
+			first.
+		"""
+		taken        = self._outbox
+		self._outbox = []
+		return taken
+
+
+	def _push_available(self) -> bool:
+		"""Whether memory/events/subscribe can work on this connection.
+
+		Three things must all hold: the capability is declared, the operator did
+		not disable push at setup, and the binding can physically carry a
+		notification back to the client. serve_a2m_stdio and connect_local set
+		`push_transport`; HTTP never does.
+
+		Returns:
+			bool: True when a subscription would deliver.
+		"""
+		return self.supports("events") and self.push_events and self.push_transport
+
+
+	def _emit(self, kind: str, owner: str = None, **fields: Any) -> None:
+		"""Record an event, and push it if anyone subscribed.
+
+		Every event goes through the log first: push and poll are two views of
+		one sequence, so a client that misses a notification can always catch up
+		with a cursor.
+
+		Args:
+			kind (str): The event kind.
+			owner (str, optional): The scope the event belongs to.
+			**fields: Event payload. None values are dropped.
+		"""
+		if not self.supports("events"):
+			return
+
+		event        = self.events_log.append(kind, owner=owner, **fields)
+		subscription = self._subscription
+
+		if subscription is None or not self._push_available():
+			return
+		if subscription["kinds"] and kind not in subscription["kinds"]:
+			return
+		if owner is not None and subscription["owner"] is not None and owner != subscription["owner"]:
+			return
+
+		notification = make_notification(A2M_EVENT_NOTIFICATION, event)
+		if self._notify_sink is not None:
+			self._notify_sink(notification)
+		else:
+			self._outbox.append(notification)
 
 
 class MemoryClient:
@@ -946,6 +1273,80 @@ class MemoryClient:
 		return self.client.call("memory/consolidate")
 
 
+	def events(self, cursor: str = None, limit: int = 256, kinds: list[str] = None) -> dict[str, Any]:
+		"""Read what changed since a cursor.
+
+		Call once with no cursor to get a starting position, then poll with the
+		cursor each reply returns. If a reply carries 'reset', events were
+		missed -- re-read whatever state was being tracked.
+
+		Args:
+			cursor (str, optional): Where to read from. Opaque; never parse it.
+			limit (int, optional): Maximum events per poll.
+			kinds (list[str], optional): Keep only these event kinds.
+
+		Returns:
+			dict: 'events' (oldest first) and 'cursor', plus 'more' and 'reset'
+			when true.
+
+		Example:
+			position = memory.events()["cursor"]          # subscribe from now
+			...
+			reply    = memory.events(cursor=position)
+			position = reply["cursor"]
+		"""
+		params = {"limit": limit}
+		if cursor is not None:
+			params["cursor"] = cursor
+		if kinds is not None:
+			params["kinds"] = list(kinds)
+
+		return self.client.call("memory/events", self._scoped(params))
+
+
+	def subscribe_events(self, kinds: list[str] = None) -> bool:
+		"""Ask the server to push events as they happen.
+
+		Only works where the transport can carry a notification back -- stdio
+		and in-process, never HTTP. Check describe()['events']['push'] first,
+		or be ready for -32003. Delivered events arrive via take_events().
+
+		Args:
+			kinds (list[str], optional): Deliver only these event kinds.
+
+		Returns:
+			bool: True when subscribed.
+		"""
+		params = {"kinds": list(kinds)} if kinds else {}
+		return bool(self.client.call("memory/events/subscribe", self._scoped(params)).get("subscribed", False))
+
+
+	def unsubscribe_events(self) -> bool:
+		"""Stop the server pushing events.
+
+		Returns:
+			bool: False, the new subscription state.
+		"""
+		return bool(self.client.call("memory/events/unsubscribe", self._scoped({})).get("subscribed", False))
+
+
+	def take_events(self) -> list[dict[str, Any]]:
+		"""The events pushed since the last call, oldest first.
+
+		Push delivery is passive on the client side: notifications accumulate on
+		the transport as responses are read, and this drains them. A client that
+		wants to block for events should poll memory/events instead.
+
+		Returns:
+			list[dict]: Event objects from 'memory/event' notifications.
+		"""
+		events = []
+		for message in self.client.take_notifications():
+			if isinstance(message, dict) and message.get("method", None) == "memory/event":
+				events.append(message.get("params", {}))
+		return events
+
+
 	def close(self) -> None:
 		"""Close the underlying transport, terminating a subprocess or connection.
 		"""
@@ -972,8 +1373,18 @@ def connect_local(stack: MemoryStack = None, name: str = "agent-memory", agent: 
 		memory = connect_local(MemoryStack())
 		agent  = Agent(model, memory=memory)
 	"""
-	server = MemoryServer(stack=stack, name=name, capabilities=capabilities)
-	return MemoryClient(Client(LocalTransport(server.dispatcher)), agent=agent)
+	server    = MemoryServer(stack=stack, name=name, capabilities=capabilities)
+	transport = LocalTransport(server.dispatcher)
+
+	# In-process, a notification is delivered by callback -- there is no byte
+	# stream to carry it (spec §8.1). It still round-trips through JSON so a
+	# local subscriber sees exactly what a stdio one would.
+	server.push_transport = True
+	server._notify_sink   = lambda notification: transport.notifications.append(
+		json.loads(json.dumps(notification))
+	)
+
+	return MemoryClient(Client(transport), agent=agent)
 
 
 def connect_stdio(command: list[str], env: dict[str, str] = None, cwd: str = None, on_stderr: Callable = None, agent: str = None) -> MemoryClient:
@@ -1047,6 +1458,11 @@ def serve_a2m_http(
 		server = MemoryServer()
 		serve_a2m_http(server, port=8778).serve_forever()
 	"""
+	# HTTP has no server-to-client channel, so push must not be advertised on
+	# it -- and the describe snapshot below is what the well-known profile
+	# serves, so this must be settled first (spec §4.13).
+	server.push_transport = False
+
 	def check_version(headers: Any) -> tuple[int, dict[str, Any]] | None:
 		"""Refuse a request that declares a version this server does not speak.
 
@@ -1075,6 +1491,21 @@ def serve_a2m_http(
 	)
 
 
+def serve_a2m_stdio(server) -> None:
+	"""Run an A2M server on stdin/stdout, with push delivery wired up.
+
+	Prefer this over bare jsonrpc.serve_stdio for anything declaring `events`:
+	the bare loop never drains the server's notification outbox, so a
+	subscription would accept and then deliver nothing.
+
+	Args:
+		server: Anything exposing 'dispatcher' and 'take_notifications'.
+			MemoryServer and MemoryRouter both do.
+	"""
+	server.push_transport = True
+	serve_stdio(server.dispatcher, drain=server.take_notifications)
+
+
 def serve(stack: MemoryStack = None, name: str = "agent-memory", capabilities: list[str] = None) -> None:
 	"""Run this process as an A2M server on stdin/stdout.
 
@@ -1083,7 +1514,7 @@ def serve(stack: MemoryStack = None, name: str = "agent-memory", capabilities: l
 		name (str, optional): Server name.
 		capabilities (list[str], optional): What to declare.
 	"""
-	serve_stdio(MemoryServer(stack=stack, name=name, capabilities=capabilities).dispatcher)
+	serve_a2m_stdio(MemoryServer(stack=stack, name=name, capabilities=capabilities))
 
 
 def serve_over_http(stack: MemoryStack = None, name: str = "agent-memory", host: str = "127.0.0.1", port: int = 8778) -> None:

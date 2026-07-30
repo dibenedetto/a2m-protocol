@@ -26,14 +26,17 @@ a2m/__init__.py            re-exports the surface implementers reach for
 a2m/__main__.py            `python -m a2m` — the reference server on the CLI
 
 implementations/server_minimal.py    core-only server. IMPORTS NOTHING FROM HERE.
-implementations/server_minimal.ts    the same, in TypeScript. No deps, no build.
+implementations/server_minimal.ts    core + keys, in TypeScript. No deps, no build.
 implementations/client.py            independent client + CLI. IMPORTS NOTHING FROM HERE.
 implementations/store.py             tier logic shared by both SQL backends. NO SQL.
 implementations/store_sqlite.py      that logic on SQLite, one TierStore per tier
 implementations/store_postgres.py    the same on PostgreSQL + pgvector. Optional dep.
 implementations/server_federated.py  one A2M server per tier, one router in front
+implementations/bridge_mcp.py        any A2M server as an MCP tool server. Stdlib only.
 implementations/adapters/langchain.py  LangChain chat history + retriever. Optional dep.
 implementations/adapters/agno.py       Agno VectorDb. Optional dep.
+implementations/adapters/crewai.py     CrewAI StorageBackend. Optional dep, needs Python <= 3.13.
+implementations/adapters/autogen.py    AutoGen Memory protocol. Optional dep.
 
 tools/conformance.py       conformance suite. Speaks only the protocol.
 tools/test_a2m.py          implementation tests
@@ -41,6 +44,7 @@ tools/demo_stack.py        both topologies, end to end
 tools/bench_embeddings.py  which embedding model, measured
 
 examples/cross_framework.py  both frameworks, one store, 6/6
+examples/n8n_workflow.json   n8n over stock HTTP nodes, importable
 ```
 
 `implementations/adapters/` is the only place a third-party import is allowed,
@@ -61,29 +65,32 @@ imported a server could only confirm the server agrees with itself.
 Everything runs from the repository root.
 
 ```bash
-python -m tools.test_a2m              # 219 checks, offline, no test runner
-python -m doctest a2m/memory.py a2m/text.py a2m/retrieval.py a2m/jsonrpc.py  # examples are real
-python -m tools.conformance --stdio python -m a2m                            # 78/78
-python -m tools.conformance --stdio python implementations/server_minimal.py # 34/34, 8 skipped
-python -m tools.conformance --stdio python -m implementations.store_sqlite s.db      # 78/78
-python -m tools.conformance --stdio python -m implementations.server_federated r/    # 78/78
-python -m tools.conformance --stdio node --experimental-strip-types implementations/server_minimal.ts  # 34/34
+python -m tools.test_a2m              # 232 checks, offline, no test runner
+python -m doctest a2m/memory.py a2m/text.py a2m/retrieval.py a2m/jsonrpc.py a2m/protocol.py  # examples are real
+python -m tools.conformance --stdio python -m a2m                            # 94/94
+python -m tools.conformance --stdio python implementations/server_minimal.py # 36/36, 9 skipped
+python -m tools.conformance --stdio python -m implementations.store_sqlite s.db      # 94/94
+python -m tools.conformance --stdio python -m implementations.server_federated r/    # 94/94
+python -m tools.conformance --stdio node --experimental-strip-types implementations/server_minimal.ts  # 46/46
 python -m tools.demo_stack && python -m tools.demo_stack --router   # 18/18 each
 
 # PostgreSQL targets, need a server with pgvector:
 docker run -d --name a2m-pg -e POSTGRES_PASSWORD=a2m -e POSTGRES_USER=a2m \
   -e POSTGRES_DB=a2m -p 55432:5432 pgvector/pgvector:pg16
 python -m tools.conformance --stdio python -m implementations.store_postgres \
-  postgresql://a2m:a2m@127.0.0.1:55432/a2m                          # 78/78
+  postgresql://a2m:a2m@127.0.0.1:55432/a2m                          # 94/94
 python -m tools.conformance --stdio python -m implementations.server_federated \
-  postgresql://a2m:a2m@127.0.0.1:55432/a2mfed --backend postgres    # 78/78
+  postgresql://a2m:a2m@127.0.0.1:55432/a2mfed --backend postgres    # 94/94
+# (the a2mfed database must exist: docker exec a2m-pg psql -U a2m -d a2m -c "CREATE DATABASE a2mfed")
 
 python implementations/client.py --stdio python implementations/server_minimal.py -- describe
 ```
 
-Over HTTP the suite runs five more checks that stdio cannot reach — Origin,
-version header, 405, well-known — for **82/82**. Start a server with `--http`
-first, then `python -m tools.conformance --http http://127.0.0.1:8778/`.
+Over stdio the full-capability targets include push delivery end to end. Over
+HTTP the suite instead checks that push is honestly refused, plus the binding
+checks stdio cannot reach — Origin, version header, 405, well-known — for
+**94/94** there too. Start a server with `--http` first, then
+`python -m tools.conformance --http http://127.0.0.1:8778/`.
 
 **A change is not done until all seven conformance targets still pass.** They
 share no storage code — one is not even Python, two need a database — so a change
@@ -140,7 +147,20 @@ Docstring examples are executed by doctest. If you write one, it must be true.
 - **No batches, no server-initiated requests.** Every binding carries single
   JSON-RPC objects; an array is `-32600`. Both rules exist to match MCP, so an
   agent runtime that already speaks it needs no second code path (DECISION 021).
-  `MemoryServer` and `MemoryRouter` build `Dispatcher(allow_batch=False)`.
+  `MemoryServer` and `MemoryRouter` build `Dispatcher(allow_batch=False)`. The
+  one server-to-client message is the `memory/event` **notification** — no
+  `id`, no reply expected — and only after an explicit subscribe.
+- **Push and poll are one log.** Every event goes through `EventLog` first;
+  push mirrors it. Never emit a notification that is not also pollable — a
+  client that misses it could never catch up. A consolidation is **one**
+  coalesced event, never one per record.
+- **Push is never advertised over HTTP.** The binding cannot carry a
+  notification back, so `describe` must report `"push": false` there and
+  subscribe must answer `-32003`. `serve_a2m_http` and `serve_a2m_stdio` set
+  `push_transport`; bare `serve_stdio` without the drain would accept a
+  subscription and then deliver nothing — use `serve_a2m_stdio`.
+- **Event visibility is recall visibility.** A scoped caller sees its own
+  events and unscoped ones, never another owner's (spec §4.12, DECISION 026).
 - **Over HTTP, an unpermitted `Origin` is 403.** The interesting deployment is
   local and unauthenticated, which is exactly where a browsed page could
   otherwise drain the agent's memory. Use `serve_a2m_http`, never bare
@@ -177,14 +197,12 @@ purpose.
 ## Open questions
 
 Everything carried from the pre-0.1 draft is now settled: caller-owned
-embeddings, addressable keys and external records all landed in 0.1, and
-hierarchical namespaces were folded into keys (DECISIONS 017, 018, 019).
-
-`events` is **out of 0.1** and its name reserved for 0.2 (spec §9.1, DECISION
-020). No transport in §8 carries a server-initiated message, so nothing could
-exercise it. **Do not re-add it to `A2M_CAPABILITIES`** — the conformance suite
-now fails a server that declares it. Reviving it in 0.2 means answering the four
-questions in DECISION 020 first, of which `owner` scoping is the one with teeth.
+embeddings, addressable keys, external records and events all landed in 0.1,
+and hierarchical namespaces were folded into keys (DECISIONS 017, 018, 019,
+026). `events` answered DECISION 020's four questions — scoping is recall's,
+polling needs no subscription, volume is coalesced, ordering is the cursor's —
+and is exercised by every conformance target. No capability names are
+currently reserved (spec §9.1).
 
 ## Provenance
 
