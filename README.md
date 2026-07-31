@@ -1,15 +1,18 @@
-# Agent2Memory (A2M) Protocol
+# A2M — the Agent-to-Memory Protocol
 
-> A shared memory protocol for AI agents across frameworks.
+> One memory store, readable and writable by agents from any framework.
 
 [![CI](https://github.com/dibenedetto/a2m-protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/dibenedetto/a2m-protocol/actions/workflows/ci.yml)
 [![Status](https://img.shields.io/badge/status-draft_v0.1-orange)](#status)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Spec](https://img.shields.io/badge/spec-a2m--0.1-green)](spec/a2m-0.1.md)
 
-**LangChain**, **Agno**, **n8n**, **CrewAI**, **AutoGen** — each ships its own memory model. Agents from different frameworks cannot share state, history, or knowledge, even when running inside the same workflow.
+**LangChain**, **Agno**, **n8n**, **CrewAI**, **AutoGen** — each ships its own
+memory model. Agents from different frameworks cannot share state, history or
+knowledge, even when running inside the same workflow.
 
-**A2M** is a thin, open protocol that lets any agent framework read and write to a shared memory store through one interface — without modifying existing agents.
+**A2M** is a small open protocol that puts a memory store behind one interface,
+so any of them can read and write the same memory without being modified.
 
 **Specification:** [spec/a2m-0.1.md](spec/a2m-0.1.md) · **Home:** <https://a2m-protocol.org>
 
@@ -24,10 +27,28 @@ LangChain agent     Agno agent      n8n node        CrewAI crew
       ▼                   ▼               ▼                ▼
   in-process          PostgreSQL      workflow ctx      ChromaDB
 
-  ✗ No shared state   ✗ Lost across runs   ✗ No cross-framework queries
+  ✗ No shared state   ✗ Lost across runs   ✗ No cross-framework recall
 ```
 
-## How A2M works
+## Sixty seconds
+
+```bash
+pip install a2m-protocol
+```
+
+```python
+from a2m import connect_local, connect_stdio, connect_http
+from a2m.memory import MemoryStack
+
+memory = connect_local(MemoryStack())              # in-process
+memory = connect_stdio(["python", "-m", "a2m"])    # a child process
+memory = connect_http("http://127.0.0.1:8778/")    # over the network
+
+memory.remember("the deploy key rotates every ninety days")
+memory.recall(query="how often does the key change?")
+```
+
+The transport changes; the client does not.
 
 ```
 LangChain agent     Agno agent      n8n node        CrewAI crew
@@ -48,28 +69,59 @@ LangChain agent     Agno agent      n8n node        CrewAI crew
   ✓ Shared state   ✓ Persistent across runs   ✓ Semantic search built in
 ```
 
-```python
-memory = connect_local(MemoryStack())               # in-process
-memory = connect_stdio([sys.executable, "-m", "a2m"])  # a child process
-memory = connect_http("http://127.0.0.1:8778/")     # over the network
+---
 
-memory.remember("the deploy key rotates every ninety days")
-memory.recall(query="how often does the key change?")
+## A2M and MCP
+
+**MCP is how a model calls a tool. A2M is how programs share a memory store.
+Most projects want both.**
+
+They are built to compose: A2M uses the same JSON-RPC 2.0, the same stdio
+framing and the same single-endpoint HTTP binding as MCP, and its methods live
+under `memory/` precisely so one endpoint can serve both. A runtime that already
+speaks MCP needs no second code path.
+
+What differs is who is on the receiving end. Ask an MCP memory tool for
+something and you get text, because a tool result is written for a model to
+read:
+
+```
+Found 3 memories:
+1. the deploy key rotates every ninety days (score 0.72)
+2. ...
 ```
 
-The transport changes; the client does not. Methods live under `memory/`, a
-namespace chosen so one endpoint can serve A2M alongside MCP's `tools/`,
-`resources/` and `prompts/`.
+Ask A2M and you get a record:
 
-The bindings are deliberately the ones MCP and A2A already use — JSON-RPC 2.0,
-newline-delimited over stdio, a single POST endpoint over HTTP, no batches, and
-no server-initiated requests. A2M adds only what a memory server specifically
-needs: `Origin` validation, an `A2M-Protocol-Version` header, and a profile at
-`/.well-known/a2m-server.json`. See spec [§8](spec/a2m-0.1.md) and DECISION 021.
+```json
+{ "id": "01J8Z9", "content": "the deploy key rotates every ninety days",
+  "created_at": "2026-07-28T10:15:30.123Z", "tier": "semantic",
+  "key": "ops/deploy-key", "revision": 2, "score": 0.72 }
+```
+
+A model can work with the first. A program cannot: it cannot tell a corrected
+fact from a stale one, restrict a search to one tier, replay a transcript in
+order, or ask the store what it supports before calling it. Those are exactly
+what a framework adapter, a router, or a second agent needs — and keeping them
+is the whole reason A2M is a protocol rather than a tool schema.
+
+**So use whichever matches your consumer:**
+
+| Your consumer | Use |
+|---|---|
+| An agent, through an MCP client (Claude Code, Cursor, Claude Desktop) | the **bridge** — one command, and every MCP client can use any A2M store |
+| Your own code: an adapter, a router, a pipeline, another agent | **A2M directly** |
+
+```bash
+python -m implementations.bridge_mcp --stdio python -m implementations.store_sqlite memory.db
+```
+
+The bridge is [one dependency-free file](implementations/bridge_mcp.py), and it
+builds its tool list from whatever the store underneath declares.
 
 ---
 
-## Why it is shaped this way
+## How it is shaped
 
 **A memory store is not a database.** Agents do not query memory, they *recall*
 from it: they hand over the situation they are in and expect back whatever is
@@ -93,18 +145,9 @@ and layers the rest into **capabilities** a server declares and a client checks.
 | `external` | *(adds `uri`: points at a file, URL or blob)* | no |
 | `events` | `events` `events/subscribe` `events/unsubscribe` | no |
 
-A call into an undeclared capability returns `-32003 CAPABILITY_NOT_SUPPORTED` —
-**not** `-32601`, which a client cannot distinguish from a typo.
-
-**`events` is a cursor first and a push second.** A client brings the position
-it has reached and gets back everything that happened after it, ordered,
-exactly once — on any transport, with no subscription state on the server. On
-the transports that can carry a notification back (stdio, in-process), a
-client may additionally subscribe and have the same events pushed as they
-happen; over HTTP `describe` honestly reports `"push": false` and the cursor
-is the interface. Volume is answered by coalescing: a consolidation that moves
-ten thousand records is **one** event carrying counts. Spec §4.12–§4.14,
-DECISION 026.
+Which means **classic RAG is the degenerate case**: one tier, read-only,
+`recall` only. An existing RAG stack becomes an A2M server by implementing two
+methods and refusing writes, and every A2M client then works against it.
 
 ---
 
@@ -147,40 +190,48 @@ a vector database, is in [spec/implementing-a2m.md](spec/implementing-a2m.md).
 
 ---
 
-## Why not an MCP tool server?
+## Conformance
 
-It is the right first question: memory servers already ship as MCP tools, and
-every MCP client can call them today. A2M deliberately shares MCP's plumbing —
-JSON-RPC 2.0, the same newline-delimited stdio framing, one POST endpoint, no
-batches, no server-initiated requests (DECISION 021) — so the two compose
-rather than compete. What A2M refuses to do is put the *store* behind
-`tools/call`, because a tool result is text for a model to read, and a memory
-store's consumers are mostly not models:
+[tools/conformance.py](tools/conformance.py) speaks only the protocol — it never
+imports the server under test, so an implementation in another language is
+tested exactly as a Python one is.
 
-- **Records stay typed.** `metadata` round-trips byte-for-byte, ids are
-  opaque, timestamps are RFC 3339, a caller's embedding is stored verbatim —
-  rules a conformance suite can check on a wire format, and can only *hope
-  for* in a tool description.
-- **Negotiation stays checkable.** `describe` declares capabilities and an
-  undeclared one answers `-32003`. Tool lists are per-server vocabulary — two
-  memory MCP servers already disagree on tool names, which is the silo
-  rebuilt one layer up.
-- **The memory semantics survive.** Replay versus search — `timeline` versus
-  `recall` — is a distinction frameworks build on. Flattened into tools it
-  survives only as a sentence a model may or may not read.
-
-The relationship, made runnable:
-[implementations/bridge_mcp.py](implementations/bridge_mcp.py) is a
-stdlib-only MCP server whose tools are **any** A2M server. Point Claude
-Desktop, Claude Code or Cursor at it and every MCP client becomes an A2M
-client — with the tool list derived from the store's declared capabilities:
-
-```
-python -m implementations.bridge_mcp --stdio python -m implementations.store_sqlite memory.db
+```bash
+python -m tools.conformance --stdio python -m a2m
+python -m tools.conformance --stdio node --experimental-strip-types implementations/server_minimal.ts
+python -m tools.conformance --http  http://127.0.0.1:8778/
 ```
 
-MCP is how a *model* reaches capabilities; A2M is how *agent infrastructure*
-shares memory underneath. See DECISION 027.
+Six implementations ship, and the same unmodified suite passes against all of
+them:
+
+| | storage | declares | conformance |
+|---|---|---|---|
+| `python -m a2m` | a dict in memory | everything | 94/94 |
+| [server_minimal.py](implementations/server_minimal.py) | a dict, stdlib only | `core` only | 36/36 |
+| [server_minimal.ts](implementations/server_minimal.ts) | a Map, **TypeScript** | `core` + `keys` | 46/46 |
+| [store_sqlite.py](implementations/store_sqlite.py) | SQLite + sqlite-vec | everything | 94/94 |
+| [store_postgres.py](implementations/store_postgres.py) | **PostgreSQL + pgvector** | everything | 94/94 |
+| [server_federated.py](implementations/server_federated.py) | four A2M servers | everything | 94/94 |
+
+Checks are grouped by capability and skipped when a server does not declare one.
+Declaring a capability and then not honouring it *is* a failure — a client
+trusts what a server says about itself, so a server that lies there breaks
+clients in ways no defensive coding on their side can fix.
+
+[server_minimal.py](implementations/server_minimal.py) imports **nothing from
+this repository**. It exists to answer a question the reference implementation
+cannot: *is the specification enough on its own?* Writing it found a real bug —
+the reference was rejecting unrecognised parameters, breaking the
+forward-compatibility rule that lets a newer client talk to an older server.
+
+[server_minimal.ts](implementations/server_minimal.ts) answers the next one:
+*is it enough in a language that is not the reference language?* No
+dependencies, no build step — `node --experimental-strip-types` runs the file as
+it is. Which makes the useful demonstration a pair:
+[client.py](implementations/client.py) talking to that server is a Python client
+and a TypeScript server sharing not one line of code, neither written against
+the other.
 
 ---
 
@@ -204,123 +255,32 @@ shares memory underneath. See DECISION 027.
 | [tools/conformance.py](tools/conformance.py) | conformance suite for **any** A2M server |
 | [tools/test_a2m.py](tools/test_a2m.py) | `python -m tools.test_a2m` — no test runner, no network |
 | [tools/bench_embeddings.py](tools/bench_embeddings.py) | which embedding model backs recall, measured |
-| [examples/cross_framework.py](examples/cross_framework.py) | both frameworks sharing one store, as a runnable script |
-| [examples/embedders.py](examples/embedders.py) | choosing what ranks recall: lexical, embeddings, hybrid, caller-owned |
-| [examples/rag_ingest.py](examples/rag_ingest.py) | loading a corpus: chunks, re-ingestion that replaces, a corpus tier |
-| [examples/procedural.py](examples/procedural.py) | skills as procedural memory, and why nothing spills into it |
-| [examples/n8n_workflow.json](examples/n8n_workflow.json) | n8n against an A2M server — stock HTTP nodes, no custom node |
+| [examples/](examples/) | [cross-framework](examples/cross_framework.py) · [embedders](examples/embedders.py) · [corpus ingestion](examples/rag_ingest.py) · [procedural memory](examples/procedural.py) · [n8n](examples/n8n_workflow.json) |
 | [DECISIONS.md](DECISIONS.md) | why the non-obvious choices are what they are |
 
 Three directories, and the split is the argument. `a2m/` is the library an
 implementation is built out of. `implementations/` is the specification
 implemented more than once — two storage engines, two languages, two topologies —
 because one implementation only ever proves the document describes the program
-that was already written. `tools/` is what judges them, and
-[tools/conformance.py](tools/conformance.py) imports nothing from
-`implementations/` at all.
+that was already written. `tools/` is what judges them.
 
 The protocol, the reference implementation and the conformance suite need
-**nothing but the standard library**. `sqlite-vec` and `ollama` are optional and
-used only by the reference store and the benchmark.
+**nothing but the standard library**.
 
 ### Reading order
 
-The files are not equally good places to start, and the two largest are the
-worst ones.
-
 1. **[spec/a2m-0.1.md](spec/a2m-0.1.md)** — everything else is downstream of it.
-2. **[implementations/server_minimal.py](implementations/server_minimal.py)**
-   (467 lines) — a whole server, written from the specification alone. If you are
+2. **[implementations/server_minimal.py](implementations/server_minimal.py)** —
+   a whole server in 470 lines, written from the specification alone. If you are
    implementing A2M, copy this.
 3. **[implementations/client.py](implementations/client.py)** — the other side,
-   under the same rule. Between them they show both halves of a conversation with
-   nothing shared.
-4. **[implementations/store.py](implementations/store.py)**,
-   **[implementations/store_sqlite.py](implementations/store_sqlite.py)** and
-   **[implementations/server_federated.py](implementations/server_federated.py)**
-   — 1100, 800 and 1100 lines. These are *reference implementations*, not
-   samples: they exist to prove the protocol survives a real store and a real
-   federation, and to be read a section at a time when you hit the problem they
-   solve. Reading any of them front to back to learn A2M is the wrong way round.
+   under the same rule.
 
----
-
-## Conformance
-
-[tools/conformance.py](tools/conformance.py) speaks only the protocol — it never
-imports the server under test, so an implementation in another language is
-tested exactly as a Python one is.
-
-```
-python -m tools.conformance --stdio python -m a2m
-python -m tools.conformance --stdio python implementations/server_minimal.py
-python -m tools.conformance --stdio node --experimental-strip-types implementations/server_minimal.ts
-python -m tools.conformance --http  http://127.0.0.1:8778/
-```
-
-Checks are grouped by capability and skipped when undeclared. Declaring a
-capability and then not honouring it *is* a failure — a client trusts
-`describe`, so a server lying there breaks clients in ways no defensive coding
-on their side can fix.
-
-Six implementations ship, and the same unmodified suite passes against all of
-them:
-
-| | storage | declares | conformance |
-|---|---|---|---|
-| `python -m a2m` | a dict in memory | everything | 94/94 |
-| [server_minimal.py](implementations/server_minimal.py) | a dict, stdlib only | `core` only | 36/36 |
-| [server_minimal.ts](implementations/server_minimal.ts) | a Map, **TypeScript** | `core` + `keys` | 46/46 |
-| [store_sqlite.py](implementations/store_sqlite.py) | SQLite + sqlite-vec | everything | 94/94 |
-| [store_postgres.py](implementations/store_postgres.py) | **PostgreSQL + pgvector** | everything | 94/94 |
-| [server_federated.py](implementations/server_federated.py) | four A2M servers | everything | 94/94 |
-
-The federation takes `--backend sqlite` or `--backend postgres`, so the last row
-is really two: four SQLite backends, or four processes sharing one PostgreSQL
-database. Both pass 94/94, and the router cannot tell which it is talking to —
-it reaches its backends over the protocol and has no way to see inside one.
-
-Over stdio the full-capability rows include push delivery end to end: the
-suite subscribes, writes, and reads the `memory/event` notification off the
-same pipe. Over HTTP the suite instead verifies that push is honestly refused
-(`describe` reports `"push": false`, subscribe answers `-32003`) and runs the
-binding checks stdio cannot reach — `Origin`, the version header, `405` on
-GET, the well-known profile — landing on **94/94** there too.
-
-[server_minimal.py](implementations/server_minimal.py) imports **nothing from this repository**. It
-exists to answer a question the reference implementation cannot: *is the
-specification enough on its own?* An implementation sharing code with the
-reference proves only that the reference agrees with itself. Writing it found a
-real bug — `a2m/protocol.py` was rejecting unrecognised parameters, breaking the
-forward-compatibility rule that lets a newer client talk to an older server.
-
-[server_minimal.ts](implementations/server_minimal.ts) answers the next question: *is it enough in a
-language that is not the reference language?* It needs no dependencies and no
-build — `node --experimental-strip-types` runs the file as it is. The port is
-where a JSON-shaped protocol earns the description, and two rules did the work:
-timestamps stay RFC 3339 strings where JavaScript's instinct is an epoch integer
-(§3.3), and an `id` is echoed back with its type intact where JavaScript would
-happily turn `1` into `"1"` (§3.2).
-
-Which makes the useful demonstration a pair: [client.py](implementations/client.py)
-talking to [server_minimal.ts](implementations/server_minimal.ts) is a Python client and a TypeScript
-server that share not one line of code, and neither was written against the
-other.
-
----
-
-## Two things to know before implementing
-
-**`owner` is not a security boundary.** The `scopes` capability partitions data;
-it does not control access. A client asserts its own `owner`, and nothing in the
-protocol stops it asserting a different one. On a local transport that is fine.
-Over a network a server **must** derive the scope from the authenticated
-principal and ignore what the client claimed — spec §6.
-
-**`score` is ranking information only.** Never comparable between servers,
-between calls, or against a fixed threshold. Different scorers occupy entirely
-different ranges, and a model rating everything `0.9` may discriminate worse
-than one spreading across `0..1` — spec §5.3.
+The large files — [store.py](implementations/store.py),
+[store_sqlite.py](implementations/store_sqlite.py),
+[server_federated.py](implementations/server_federated.py) — are reference
+implementations rather than samples. Read a section when you hit the problem it
+solves; reading one front to back to learn A2M is the wrong way round.
 
 ---
 
@@ -328,97 +288,59 @@ than one spreading across `0..1` — spec §5.3.
 
 Everything runs from the repository root.
 
-```
+```bash
 python -m tools.test_a2m                       # 232 checks, offline
 python -m tools.demo_stack                     # the whole stack, on disk
 python -m tools.demo_stack --router            # same, federated across processes
 python -m a2m                                  # the reference server, in memory
-python -m implementations.store_sqlite memory.db          # a persistent server on stdio
+python -m implementations.store_sqlite memory.db                   # persistent, on stdio
 python -m implementations.server_federated memories/ --http 8778   # federated, over HTTP
-python -m implementations.server_federated postgresql://a2m:a2m@127.0.0.1:55432/a2m --backend postgres
 ```
 
-`server_minimal.py` and `client.py` are the exceptions: they import nothing at
-all, so they run as plain files from anywhere, which is the whole claim they are
-making.
+`server_minimal.py` and `client.py` import nothing at all, so they run as plain
+files from anywhere — which is the whole claim they are making.
 
-```
-python implementations/server_minimal.py
+```bash
 python implementations/client.py --stdio python -m implementations.store_sqlite memory.db -- remember "the deploy key rotates every ninety days"
 python implementations/client.py --stdio python -m implementations.store_sqlite memory.db -- recall   "how often does the key change?"
-python implementations/client.py --http  http://127.0.0.1:8778/ -- describe
 ```
+
+---
+
+## Before you implement
+
+Two rules that are easy to miss and expensive to get wrong. Both are normative
+in the specification.
+
+**`owner` is not a security boundary.** The `scopes` capability partitions data;
+it does not control access. A client asserts its own `owner`, and nothing in the
+protocol stops it asserting a different one. On a local transport that is fine.
+Over a network, a server **must** derive the scope from the authenticated
+principal and ignore what the client claimed.
+
+**`score` is ranking information only.** Never comparable between servers,
+between calls, or against a fixed threshold. Different scorers occupy entirely
+different ranges, and a model rating everything `0.9` may discriminate worse
+than one spreading across `0..1`.
+
+[CONTRIBUTING.md](CONTRIBUTING.md) has the rest, including the five rules every
+implementation gets wrong.
 
 ---
 
 ## Status
 
 Draft `a2m/0.1`. Pre-1.0, so compatibility requires an exact minor match and any
-minor version may introduce breaking changes.
+minor version may introduce breaking changes. What changed and why:
+[CHANGELOG.md](CHANGELOG.md).
 
-### History, and what is still open
-
-This repository was reset on 2026-07-28 to carry A2M 0.1. The earlier REST draft
-is **not gone** — it remains in this repository's history at commit
-[`7ca383c`](../../commit/7ca383c), recoverable with `git checkout 7ca383c`.
-
-| | draft | 0.1 |
-|---|---|---|
-| wire format | REST over HTTP | JSON-RPC 2.0 — in-process, stdio, HTTP |
-| memory kinds | working, episodic, semantic, procedural, **external** | the first four |
-| addressing | hierarchical namespaces, recursive reads | `key_prefix`, plus `owner` and `session` |
-| identity | caller-set `key`, upsert by key | **both** — opaque `id` *and* addressable `key` |
-| embeddings | **caller-owned**, stored verbatim | **both** — caller-owned, or server-side |
-| record kinds | `external` as a fifth *type* | `external` as a record *property*, legal in any tier |
-| events | `WS /subscribe` | cursor polling on every transport, push where one can carry it |
-| conformance | — | executable suite, six passing implementations |
-
-The four memory kinds survived unchanged, having been arrived at twice
-independently — which is the strongest evidence in this repository that they are
-the right four.
-
-The draft's ideas are now **in** 0.1, each improving on what it replaced:
-
-- **Addressable keys** (`keys`). `id` identifies a write; `key` addresses a
-  *fact*. Writing to an occupied key **replaces** what is there, keeping the id
-  and advancing `revision`. That is what makes a memory correctable rather than
-  merely appendable — a superseded fact that is only *outnumbered* by its
-  successor is still there to be recalled, with the same confidence as the truth.
-  Slash-delimited keys plus `key_prefix` give the hierarchy and the recursive
-  scope reads the draft wanted from namespaces, without a second addressing
-  dimension to keep consistent with the first.
-
-- **Caller-owned embeddings** (`embeddings`). A vector supplied by the caller is
-  stored **verbatim** — never regenerated, never replaced. Two frameworks
-  embedding with different models can share a store only if neither has its
-  vectors silently rewritten into the other's space. A store with no model at all
-  still answers vector searches. Mismatched widths are refused with `-32008`
-  rather than compared: cosine between vectors of different lengths is not a
-  worse answer, it is not an answer.
-
-- **External records** (`external`). A record may point at a file, URL or blob
-  instead of containing it. `content` keeps its ordinary meaning — the text that
-  gets indexed, so the reference is findable — while `uri` says where the real
-  thing lives. The server **never dereferences it**: fetching a caller's URI
-  would make every write a request the server chose to issue to an address its
-  caller supplied.
-
-- **Events** (`events`). The draft wanted `WS /subscribe`; 0.1 ships something
-  a plain request/response channel can carry: an opaque cursor that replays
-  what happened, exactly once and in order, on any transport — with push as an
-  optional layer on the transports that can deliver a notification. What kept
-  it out of earlier drafts was `owner` scoping, and the answer is recall's:
-  an event is delivered only to a caller who could have recalled the record
-  it describes — see [DECISIONS.md](DECISIONS.md) 026.
-
-Hierarchical namespaces were **folded into keys** rather than added as a
-separate dimension; see [DECISIONS.md](DECISIONS.md) 017. All of the draft's
-ideas are now in 0.1.
-
----
+The most useful contribution is **an implementation this repository did not
+write** — in any language, over any storage. Run the conformance suite against
+it and send a pull request adding your row to the table above. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE) and spec §10.
+MIT. See [LICENSE](LICENSE).
 
 A protocol that is expensive to implement does not get implemented.

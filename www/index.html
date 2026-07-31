@@ -104,47 +104,58 @@ checks.
 </table>
 </div>
 <p>
-Classic <strong>RAG is the degenerate case</strong>: one tier, read-only,
-<code>recall</code> only. An existing RAG stack can be exposed over A2M in an
-afternoon — implement <code>describe</code> and <code>recall</code>, return
-<code>-32004 READ_ONLY</code> from <code>remember</code> — and every A2M client
-works against it.
+Which means <strong>classic RAG is the degenerate case</strong>: one tier,
+read-only, <code>recall</code> only. An existing RAG stack becomes an A2M server
+by implementing two methods and refusing writes, and every A2M client then works
+against it.
 </p>
 </section>
 
 <section>
-<h2>Why not just an MCP tool server?</h2>
-<p>
-It is the right first question. A2M deliberately shares MCP's plumbing —
-JSON-RPC 2.0, the same stdio framing, one POST endpoint, no batches, no
-server-initiated requests — so the two compose rather than compete. What A2M
-refuses is putting the <em>store</em> behind <code>tools/call</code>, because a
-tool result is text for a model to read, and a memory store's consumers are
-mostly not models.
+<h2>A2M and MCP</h2>
+<p class="lead">
+MCP is how a model calls a tool. A2M is how programs share a memory store. Most
+projects want both.
 </p>
-<ul>
-<li><strong>Records stay typed.</strong> Metadata round-trips byte-for-byte, ids
-are opaque, timestamps are RFC 3339, a caller's embedding is stored verbatim —
-rules a conformance suite can check on a wire format and can only hope for in a
-tool description.</li>
-<li><strong>Negotiation stays checkable.</strong> <code>describe</code> declares
-capabilities and an undeclared one answers <code>-32003</code>. Tool lists are
-per-server vocabulary: two memory MCP servers already disagree on tool names,
-which is the silo rebuilt one layer up.</li>
-<li><strong>The memory semantics survive.</strong> Replay versus search —
-<code>timeline</code> versus <code>recall</code> — is a distinction frameworks
-build on. Flattened into tools it survives only as a sentence a model may or may
-not read.</li>
-</ul>
 <p>
-And the relationship is runnable: the bundled bridge is a dependency-free MCP
-server whose tools are <em>any</em> A2M store, with the tool list derived from
-what that store declares.
+They are built to compose: A2M uses the same JSON-RPC 2.0, the same stdio
+framing and the same single-endpoint HTTP binding as MCP, and its methods live
+under <code>memory/</code> precisely so one endpoint can serve both. A runtime
+that already speaks MCP needs no second code path.
 </p>
+<p>
+What differs is who is on the receiving end. Ask an MCP memory tool for
+something and you get text, because a tool result is written for a model to
+read:
+</p>
+<pre><code>Found 3 memories:
+1. the deploy key rotates every ninety days (score 0.72)
+2. ...</code></pre>
+<p>Ask A2M and you get a record:</p>
+<pre><code class="language-json">{ "id": "01J8Z9", "content": "the deploy key rotates every ninety days",
+  "created_at": "2026-07-28T10:15:30.123Z", "tier": "semantic",
+  "key": "ops/deploy-key", "revision": 2, "score": 0.72 }</code></pre>
+<p>
+A model can work with the first. A program cannot: it cannot tell a corrected
+fact from a stale one, restrict a search to one tier, replay a transcript in
+order, or ask the store what it supports before calling it. Those are exactly
+what a framework adapter, a router, or a second agent needs — and keeping them
+is the whole reason A2M is a protocol rather than a tool schema.
+</p>
+<p><strong>So use whichever matches your consumer:</strong></p>
+<div class="scroll">
+<table>
+<thead><tr><th>Your consumer</th><th>Use</th></tr></thead>
+<tbody>
+<tr><td>An agent, through an MCP client (Claude Code, Cursor, Claude Desktop)</td><td>the <strong>bridge</strong> — one command, and every MCP client can use any A2M store</td></tr>
+<tr><td>Your own code: an adapter, a router, a pipeline, another agent</td><td><strong>A2M directly</strong></td></tr>
+</tbody>
+</table>
+</div>
 <pre><code class="language-bash">python -m implementations.bridge_mcp --stdio python -m implementations.store_sqlite memory.db</code></pre>
 <p class="muted">
-MCP is how a <em>model</em> reaches capabilities. A2M is how <em>agent
-infrastructure</em> shares memory underneath.
+The bridge is one dependency-free file, and it builds its tool list from
+whatever the store underneath declares.
 </p>
 </section>
 
@@ -214,7 +225,7 @@ forward-compatibility rule that lets a newer client talk to an older server.
 </section>
 
 <section>
-<h2>Two things to know before implementing</h2>
+<h2>Before you implement</h2>
 <p>
 <strong><code>owner</code> is not a security boundary.</strong> The
 <code>scopes</code> capability partitions data; it does not control access. A
