@@ -27,6 +27,7 @@ a2m/__main__.py            `python -m a2m` — the reference server on the CLI
 
 implementations/server_minimal.py    core-only server. IMPORTS NOTHING FROM HERE.
 implementations/server_minimal.ts    core + keys, in TypeScript. No deps, no build.
+implementations/server_readonly.py   a corpus, read-only (spec §2.1). IMPORTS NOTHING.
 implementations/client.py            independent client + CLI. IMPORTS NOTHING FROM HERE.
 implementations/store.py             tier logic shared by both SQL backends. NO SQL.
 implementations/store_sqlite.py      that logic on SQLite, one TierStore per tier
@@ -78,6 +79,7 @@ python -m tools.test_a2m              # 232 checks, offline, no test runner
 python -m doctest a2m/memory.py a2m/text.py a2m/retrieval.py a2m/jsonrpc.py a2m/protocol.py  # examples are real
 python -m tools.conformance --stdio python -m a2m                            # 94/94
 python -m tools.conformance --stdio python implementations/server_minimal.py # 36/36, 9 skipped
+python -m tools.conformance --stdio python implementations/server_readonly.py # 31/31 read-only
 python -m tools.conformance --stdio python -m implementations.store_sqlite s.db      # 94/94
 python -m tools.conformance --stdio python -m implementations.server_federated r/    # 94/94
 python -m tools.conformance --stdio node --experimental-strip-types implementations/server_minimal.ts  # 46/46
@@ -140,6 +142,12 @@ Docstring examples are executed by doctest. If you write one, it must be true.
   compare, threshold or average scores from different sources.
 - **Undeclared capability → `-32003`, never `-32601`.** A client cannot tell
   `METHOD_NOT_FOUND` from a typo.
+- **A read-only server is conformant** (spec §2.1). It answers `-32004` from
+  **both** `remember` and `forget`, consistently, and the suite runs a
+  read-only profile against it. Never "fix" that by making a write check
+  mandatory — refusing a write with the code allocated for it *is*
+  implementing the method, and this is the on-ramp for every corpus that
+  already exists.
 - **Unknown parameters are ignored, never rejected.** This is what lets a 0.2
   client talk to a 0.1 server. Every handler ends in `**ignored`.
 - **Timestamps are RFC 3339 strings.** Never epoch numbers, at any boundary.

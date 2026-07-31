@@ -146,8 +146,11 @@ and layers the rest into **capabilities** a server declares and a client checks.
 | `events` | `events` `events/subscribe` `events/unsubscribe` | no |
 
 Which means **classic RAG is the degenerate case**: one tier, read-only,
-`recall` only. An existing RAG stack becomes an A2M server by implementing two
-methods and refusing writes, and every A2M client then works against it.
+`recall` only. An existing RAG stack becomes an A2M server by serving `recall`
+and refusing writes — and that is not a diminished server, it is a conformant
+one that the suite checks against its own profile.
+[server_readonly.py](implementations/server_readonly.py) is a working example
+in one dependency-free file: replace one function with your retriever.
 
 ---
 
@@ -202,7 +205,7 @@ python -m tools.conformance --stdio node --experimental-strip-types implementati
 python -m tools.conformance --http  http://127.0.0.1:8778/
 ```
 
-Six implementations ship, and the same unmodified suite passes against all of
+Seven implementations ship, and the same unmodified suite passes against all of
 them:
 
 | | storage | declares | conformance |
@@ -210,6 +213,7 @@ them:
 | `python -m a2m` | a dict in memory | everything | 94/94 |
 | [server_minimal.py](implementations/server_minimal.py) | a dict, stdlib only | `core` only | 36/36 |
 | [server_minimal.ts](implementations/server_minimal.ts) | a Map, **TypeScript** | `core` + `keys` | 46/46 |
+| [server_readonly.py](implementations/server_readonly.py) | a fixed corpus, **read-only** | `core` only | 31/31 |
 | [store_sqlite.py](implementations/store_sqlite.py) | SQLite + sqlite-vec | everything | 94/94 |
 | [store_postgres.py](implementations/store_postgres.py) | **PostgreSQL + pgvector** | everything | 94/94 |
 | [server_federated.py](implementations/server_federated.py) | four A2M servers | everything | 94/94 |
@@ -218,6 +222,12 @@ Checks are grouped by capability and skipped when a server does not declare one.
 Declaring a capability and then not honouring it *is* a failure — a client
 trusts what a server says about itself, so a server that lies there breaks
 clients in ways no defensive coding on their side can fix.
+
+A server that refuses writes is checked against a **read-only profile** rather
+than failed: the suite notices, verifies that both write methods refuse
+consistently, and judges the rest on what the corpus actually holds. That is
+what makes "expose your existing corpus" a claim with a number attached rather
+than an assurance.
 
 [server_minimal.py](implementations/server_minimal.py) imports **nothing from
 this repository**. It exists to answer a question the reference implementation
@@ -245,6 +255,7 @@ the other.
 | [a2m/](a2m/) | the reference library: [protocol.py](a2m/protocol.py) · [memory.py](a2m/memory.py) · [retrieval.py](a2m/retrieval.py) · [text.py](a2m/text.py) · [jsonrpc.py](a2m/jsonrpc.py) |
 | [implementations/server_minimal.py](implementations/server_minimal.py) | independent `core`-only server, standard library only |
 | [implementations/server_minimal.ts](implementations/server_minimal.ts) | the same server in TypeScript, no dependencies, no build |
+| [implementations/server_readonly.py](implementations/server_readonly.py) | an existing corpus as a read-only A2M server — replace one function |
 | [implementations/client.py](implementations/client.py) | independent client and CLI, standard library only |
 | [implementations/store.py](implementations/store.py) | the tier logic both SQL backends share — no SQL in it |
 | [implementations/store_sqlite.py](implementations/store_sqlite.py) | that logic on SQLite: one file, one store per tier |

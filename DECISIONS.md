@@ -21,6 +21,25 @@ case: one tier, read-only, `recall` only. An existing RAG stack can be exposed
 over A2M in an afternoon — implement `describe` and `recall`, return
 `-32004 READ_ONLY` from `remember` — and every A2M client works against it.
 
+**And that claim went untested for exactly as long as nobody wrote the server.**
+Building one found that `tools/conformance.py` could not run it at all: the
+suite writes a record as its first act, the `-32004` escaped every handler, and
+the run died reporting `the server did not answer memory/describe` — blaming the
+one method that had worked. So the repository's best adoption argument was, by
+its own standard, in the same position `events` was in when 020 deferred it: a
+claim with no implementation behind it. The error code existed and the
+specification mentioned it exactly once, in the error table, with no rule
+saying a server using it was still conformant.
+
+Fixed in three parts, and the order matters. Spec §2.1 now says a read-only
+server is conformant and must refuse **both** write methods consistently — a
+store that accepted some writes and refused others would leave a client no way
+to tell which is which. The suite treats its first write as the probe and
+switches to a read-only profile, so a corpus is judged on what it promises
+rather than failed for declining to be a memory it never claimed to be. And
+[server_readonly.py](implementations/server_readonly.py) ships as a conformance
+target, at 31/31, so the claim now has a number attached and CI keeps it true.
+
 ---
 
 ## 002 — Undeclared capability returns `-32003`, not `-32601`

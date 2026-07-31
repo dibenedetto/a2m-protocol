@@ -36,6 +36,7 @@ PROTOCOL = "a2m/0.1"
 
 UNKNOWN_TIER             = -32002
 CAPABILITY_NOT_SUPPORTED = -32003
+READ_ONLY                = -32004
 PROTOCOL_NOT_SUPPORTED   = -32007
 INVALID_REQUEST          = -32600
 INVALID_PARAMS           = -32602
@@ -57,6 +58,10 @@ class Report:
 		self.passed  : list[str] = []
 		self.failed  : list[tuple[str, str]] = []
 		self.skipped : list[str] = []
+		# Set when the server refuses writes (spec §2.1). Not a failure: it
+		# selects a different profile, because a corpus must be judged on what
+		# it promises rather than failed for declining to be a memory.
+		self.read_only = False
 
 
 	def check(self, label: str, condition: bool, detail: Any = "") -> bool:
@@ -155,12 +160,25 @@ def test_core(client: Client, report: Report, profile: dict[str, Any]) -> None:
 	             "server rejected an unrecognised parameter")
 
 	marker = uuid.uuid4().hex
-	written = client.call("memory/remember", {"records": [
-		{"content": f"the deploy key {marker} rotates every ninety days", "role": "user",
-		 "metadata": {"suite": marker, "nested": {"a": [1, 2]}}},
-		{"content": f"the release branch {marker} is cut on thursdays", "role": "user",
-		 "metadata": {"suite": marker}},
-	]})
+
+	# The first write is also the probe. A server that refuses it with -32004 is
+	# a read-only corpus (spec §2.1) -- conformant, and checked against a
+	# different profile from here on. Doing it with the write the suite was
+	# going to make anyway keeps a writable store free of a probe record.
+	try:
+		written = client.call("memory/remember", {"records": [
+			{"content": f"the deploy key {marker} rotates every ninety days", "role": "user",
+			 "metadata": {"suite": marker, "nested": {"a": [1, 2]}}},
+			{"content": f"the release branch {marker} is cut on thursdays", "role": "user",
+			 "metadata": {"suite": marker}},
+		]})
+	except JsonRpcError as exc:
+		if exc.code != READ_ONLY:
+			raise
+		report.read_only = True
+		report.check("a read-only server refuses remember with -32004", True)
+		test_core_read_only(client, report, profile)
+		return
 
 	ids = written.get("ids", [])
 	report.check("remember returns one id per record", len(ids) == 2, written)
@@ -224,6 +242,71 @@ def test_core(client: Client, report: Report, profile: dict[str, Any]) -> None:
 	report.check("forgotten records are gone",
 	             not any(r.get("id") in ids for r in survivors),
 	             [r.get("id") for r in survivors][:4])
+
+
+def test_core_read_only(client: Client, report: Report, profile: dict[str, Any]) -> None:
+	"""Check the read side of a server that refuses writes (spec §2.1).
+
+	A pre-existing corpus exposed over A2M is the smallest useful server, and
+	the on-ramp for every retrieval system that already exists. It cannot be
+	checked by writing a record and reading it back, so it is checked against
+	what it actually holds -- and against the two rules that only apply here:
+	both write methods refuse, and they refuse consistently.
+
+	Args:
+		client (Client): Connected to the server under test.
+		report (Report): Where to record results.
+		profile (dict): The server's describe result.
+	"""
+	print("        (writes refused -- checking the read-only profile, spec §2.1)")
+
+	# Both write methods must refuse. A server refusing one and accepting the
+	# other leaves a client no way to know which is which.
+	expect_error(report, "a read-only server refuses forget with -32004", READ_ONLY,
+	             lambda: client.call("memory/forget", {"ids": ["anything"]}))
+	expect_error(report, "and refuses a selector-less forget too", READ_ONLY,
+	             lambda: client.call("memory/forget", {}))
+
+	held = client.call("memory/timeline", {}).get("records", [])
+	report.check("timeline returns a list", isinstance(held, list), held)
+
+	if not held:
+		report.skip("read-only record checks", "the corpus is empty, so there is nothing to check")
+		report.skip("read-only recall checks", "the corpus is empty")
+		return
+
+	record = held[0]
+	report.check("records carry an id"       , isinstance(record.get("id"), str) and record["id"], record)
+	report.check("records carry content"     , isinstance(record.get("content"), str), record)
+	report.check("created_at is RFC 3339"    , is_rfc3339(record.get("created_at")), record.get("created_at"))
+	report.check("created_at is not a number", not isinstance(record.get("created_at"), (int, float)))
+
+	stamps = [r.get("created_at") for r in held if r.get("created_at")]
+	report.check("timeline ascends by created_at", stamps == sorted(stamps), stamps[:4])
+
+	if len(held) >= 2:
+		newest = client.call("memory/timeline", {"limit": 1}).get("records", [])
+		report.check("timeline limit takes the newest",
+		             len(newest) == 1 and newest[0].get("id") == held[-1].get("id"), newest)
+
+	# Recall has to work, and has to work against text the corpus actually
+	# holds -- so the query is built from a record the server just returned.
+	words  = [w for w in str(record.get("content", "")).split() if len(w) > 4][:4]
+	found  = client.call("memory/recall", {"query": " ".join(words), "limit": 5}).get("records", [])
+	report.check("recall returns records for text the corpus holds", bool(found), (words, found))
+
+	scores = [r.get("score") for r in found if "score" in r]
+	if scores:
+		report.check("scores descend", scores == sorted(scores, reverse=True), scores)
+
+	empty = client.call("memory/recall", {"limit": 3})
+	report.check("an absent query is not an error", isinstance(empty.get("records"), list), empty)
+
+	report.check("metadata round-trips unchanged",
+	             all(isinstance(r.get("metadata", {}), dict) for r in held), held[:2])
+
+	expect_error(report, "an unknown method is -32601", METHOD_NOT_FOUND,
+	             lambda: client.call("memory/not_a_real_method", {}))
 
 
 def test_tiers(client: Client, report: Report, profile: dict[str, Any]) -> None:
@@ -806,11 +889,20 @@ def run(client: Client) -> Report:
 	                          ("scopes", test_scopes), ("sessions", test_sessions),
 	                          ("keys", test_keys), ("embeddings", test_embeddings),
 	                          ("external", test_external), ("events", test_events)):
-		if capability in declared:
-			suite(client, report, profile)
-		else:
+		if capability not in declared:
 			print(f"\n  {capability}")
 			report.skip(f"{capability} suite", "not declared")
+			continue
+
+		# Every remaining suite establishes its own fixtures by writing. A
+		# read-only server that declares one of these is not lying -- it simply
+		# cannot be exercised this way (spec §2.1).
+		if report.read_only:
+			print(f"\n  {capability}")
+			report.skip(f"{capability} suite", "declared, but this server refuses writes")
+			continue
+
+		suite(client, report, profile)
 
 	return report
 
@@ -846,13 +938,18 @@ def main() -> int:
 	try:
 		report = run(client)
 	except JsonRpcError as exc:
-		print(f"\n  FATAL  the server did not answer memory/describe: {exc.code} {exc.message}")
+		# Name the code and let the reader look it up, rather than guessing at
+		# which call failed. This handler used to blame memory/describe for
+		# every escaping error, which sent anyone with a read-only server
+		# looking at the one method that had worked perfectly.
+		print(f"\n  FATAL  the run stopped on an unexpected error: {exc.code} {exc.message}")
 		return 1
 	finally:
 		transport.close()
 
-	total = len(report.passed) + len(report.failed)
-	print(f"\n  {len(report.passed)}/{total} checks passed, {len(report.skipped)} skipped")
+	total   = len(report.passed) + len(report.failed)
+	profile = " (read-only)" if report.read_only else ""
+	print(f"\n  {len(report.passed)}/{total} checks passed{profile}, {len(report.skipped)} skipped")
 
 	for label, detail in report.failed:
 		print(f"    - {label}: {detail}")

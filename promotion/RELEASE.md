@@ -19,51 +19,44 @@ are to change later:
 
 | | why it is worth re-reading now |
 |---|---|
-| **§2 conformance, for a read-only server** | **The one with evidence behind it — see below.** |
+| ~~§2 conformance for a read-only server~~ | **Resolved 2026-07-30 — see below. No longer a review item.** |
 | §4.3 `recall` parameters | The most-used method, and the hardest to extend without a version bump. Is the filter surface complete — is there a filter clients will obviously want that is missing? |
 | §6.1 auth guidance | Non-normative today. If it should ever be normative, saying so before publication costs nothing and after costs a version. |
 | §4.12 event kinds | Adding a kind later is safe (clients must tolerate unknown kinds). Renaming one is not. |
 | §7 error codes | `-32001`..`-32008` are allocated. A code that should exist and does not becomes an awkward addition later. |
 | §3.1 record fields | Adding a field is safe; changing the meaning of one is not. |
 
-### The read-only conformance gap — found 2026-07-30, unresolved
+### The read-only conformance gap — resolved 2026-07-30
 
-DECISION 001 makes the project's best adoption claim:
+Recorded here because the resolution changed the specification, so it is worth
+re-reading during the freeze review rather than taken on trust.
 
-> An existing RAG stack can be exposed over A2M in an afternoon — implement
-> `describe` and `recall`, return `-32004 READ_ONLY` from `remember` — and every
-> A2M client works against it.
+DECISION 001 makes the project's best adoption claim: an existing RAG stack can
+be exposed over A2M by implementing `describe` and `recall` and refusing writes,
+and every A2M client then works against it. Building that server found the claim
+had nothing behind it — `tools/conformance.py` writes a record as its first act,
+the `-32004` escaped every handler, and the run died reporting `the server did
+not answer memory/describe`, blaming the one method that had worked perfectly.
 
-**That claim has no implementation behind it, and it does not survive contact
-with the conformance suite.** A minimal read-only server built exactly as
-described was run against `tools/conformance.py`: `test_core` calls
-`memory/remember`, the `-32004` propagates out of the check, and the run dies
-with `FATAL the server did not answer memory/describe` — which blames the wrong
-method entirely.
+Resolved in three parts:
 
-So a read-only server is, today, **unconformant and untestable**, while the
-README and DECISION 001 both advertise it as the on-ramp for every existing RAG
-stack. This is precisely the situation DECISION 020 deferred `events` for: a
-claim in the document that nothing exercises.
+1. **Spec §2.1** now states normatively that a read-only server is conformant,
+   that it **MUST** refuse both `remember` and `forget` with `READ_ONLY`, and
+   that it must refuse **consistently** — a store accepting some writes and
+   refusing others leaves a client no way to tell which is which. A client
+   **MUST** tolerate the error.
+2. **The suite** treats its first write as the probe: on `-32004` it switches to
+   a read-only profile, verifies both write methods refuse, and checks the read
+   side against whatever the corpus actually holds. The mislabelled FATAL
+   handler was fixed at the same time — it named `memory/describe` for *every*
+   escaping error.
+3. **`implementations/server_readonly.py`** ships as an eighth conformance
+   target at **31/31**, imports nothing from the repository, and isolates the
+   retrieval into a single `search` function for an implementer to replace. CI
+   runs it.
 
-Three ways out, in increasing order of cost:
-
-1. **Spec sentence only.** Say in §2 that a server **MAY** answer `-32004` from
-   `remember` and `forget` while still being core-conformant, and that a client
-   must expect it. Cheapest, and it makes the existing claim true by fiat.
-2. **Spec sentence plus suite support.** The above, plus `tools/conformance.py`
-   detecting `READ_ONLY` on the first write and switching to a read-only
-   profile — reporting something like `18/18, read-only`. This is what makes the
-   claim *checkable*, which is the standard the rest of the project holds itself
-   to.
-3. **The above plus a shipped façade.** A seventh target: a read-only server
-   over a static corpus, standard library only. Turns the strongest adoption
-   argument into a runnable example.
-
-**Recommendation: 2 before launch, 3 after.** 1 alone repeats the mistake the
-repository exists to avoid. This is a spec decision, so it is Marco's — it is
-recorded here rather than fixed because fixing it silently would have changed
-the wire contract during a release checklist.
+**What to re-read during the freeze review:** spec §2.1 itself, since it is the
+only conformance rule added after the rest of the document settled.
 
 Nothing else here is known to be wrong — the rest is a review, not a fix list.
 

@@ -133,14 +133,17 @@ importing a pre-restructure path).
 Two things found by measurement on 2026-07-30, neither fixed, both deliberately
 left for Marco because both are decisions rather than maintenance.
 
-**The read-only conformance gap.** DECISION 001 claims an existing RAG stack can
-be exposed over A2M by implementing `describe` and `recall` and returning
-`-32004 READ_ONLY` from `remember`. A server built exactly that way was run
-against the suite: it dies with `FATAL the server did not answer
-memory/describe`, which blames the wrong method. A read-only server is currently
-unconformant and untestable while being advertised as the on-ramp for every
-existing RAG stack. Options and a recommendation are in
-[promotion/RELEASE.md](promotion/RELEASE.md) §1.
+**The read-only conformance gap — RESOLVED 2026-07-30.** DECISION 001 claimed an
+existing RAG stack could be exposed by implementing `describe` and `recall` and
+refusing writes. Building that server found the suite could not run it: the
+`-32004` escaped every handler and the run died reporting `the server did not
+answer memory/describe`, blaming the one method that worked. Fixed in three
+parts: spec §2.1 makes read-only servers normatively conformant and requires
+**both** write methods to refuse consistently; the suite treats its first write
+as a probe and switches to a read-only profile; and
+`implementations/server_readonly.py` ships as an eighth conformance target at
+**31/31**, wired into CI. The FATAL handler no longer blames `describe` for
+every escaping error.
 
 **`requires-python` was `>=3.14`, which excluded almost everyone.** Measured
 across 3.9–3.14: the full suite and every conformance target pass on **3.10**

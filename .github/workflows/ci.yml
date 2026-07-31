@@ -82,6 +82,12 @@ jobs:
           - name: minimal-typescript
             command: node --experimental-strip-types implementations/server_minimal.ts
             expect: 46
+          # A corpus that refuses writes (spec §2.1). It is here because the
+          # read-only profile is the on-ramp for every existing RAG stack, and
+          # an on-ramp nothing exercises is an on-ramp that quietly breaks.
+          - name: readonly-corpus
+            command: python implementations/server_readonly.py
+            expect: 31
           - name: sqlite
             command: python -m implementations.store_sqlite ci.db
             expect: 94
