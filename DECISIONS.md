@@ -38,7 +38,7 @@ to tell which is which. The suite treats its first write as the probe and
 switches to a read-only profile, so a corpus is judged on what it promises
 rather than failed for declining to be a memory it never claimed to be. And
 [server_readonly.py](implementations/server_readonly.py) ships as a conformance
-target, at 31/31, so the claim now has a number attached and CI keeps it true.
+target, at 32/32, so the claim now has a number attached and CI keeps it true.
 
 ---
 
@@ -824,3 +824,46 @@ MCP's `tools/list`: a core-only store simply has no `memory_fetch` tool. The
 bridge deliberately has no reverse twin — an MCP *client* adapter exposing
 `tools/call` as an A2M server would put a store behind the flattening above,
 and a store is exactly what must not live there.
+
+
+---
+
+## 028 — Interoperability is a grid, not a claim
+
+**Decision.** [tools/test_interop.py](tools/test_interop.py) writes one record
+through every adapter and reads it back through every adapter, and CI fails if
+the resulting grid is smaller than five names wide.
+
+**Why a grid rather than a test.** The README's first sentence names five
+frameworks and says they can share one memory. Before this file, what actually
+ran was `cross_framework.py` — two of the five — and CI ran it never. The CrewAI
+and AutoGen adapters had no automated coverage of any kind; they appeared in the
+repository only in the import guard's exemption list, which parses their imports
+and executes nothing.
+
+That is the same shape as the two other gaps this repository has already found
+in itself: a load-bearing claim with nothing exercising it, exactly what
+DECISION 020 refused to ship and what §2.1 had to be written to fix. It was the
+last one, and the most visible, since it is the first thing the README says.
+
+**A grid, specifically, because direction matters.** A single pass/fail would
+have said "interop broken" and left the search to a human. The grid says which
+*writer* and which *reader*, and the two are not symmetric — an adapter can
+write perfectly and read nothing.
+
+**What it found, immediately.** The CrewAI adapter could read only what CrewAI
+had written. Its namespace scoped reads as well as writes, so a crew sharing a
+store with a LangChain agent saw an empty store with extra steps.
+
+That is **the same bug DECISION 023 records for Agno**, reintroduced by the
+author of this repository in a new adapter written months later, and caught on
+the first run of the matrix. The lesson generalises: a namespace scopes what you
+*write* and what you *delete*, never what you *read*. Reads are how a shared
+store earns the name.
+
+**Cost, accepted.** The interop job installs four frameworks and cannot run on
+the interpreter everything else uses — CrewAI does not work on Python 3.14. So
+it is a separate CI job on 3.12, and the fast stdlib jobs never wait for it.
+Adapters whose framework is missing are skipped **by name**, and CI checks the
+covered list rather than the exit code: a matrix that silently shrinks reports
+success for coverage it no longer has, which is worse than one that fails.

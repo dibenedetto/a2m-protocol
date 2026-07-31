@@ -171,6 +171,7 @@ and layers the rest into **capabilities** a server declares and a client checks.
 | `external` | *(adds `uri`: points at a file, URL or blob)* | no |
 | `events` | `events` `events/subscribe` `events/unsubscribe` | no |
 | `summarize` | `summarize` *(distil records into a durable statement)* | no |
+| `prompt` | *(adds rendered prompt text beside the records)* | no |
 
 Which means **classic RAG is the degenerate case**: one tier, read-only,
 `recall` only. An existing RAG stack becomes an A2M server by serving `recall`
@@ -237,13 +238,13 @@ them:
 
 | | storage | declares | conformance |
 |---|---|---|---|
-| `python -m a2m` | a dict in memory | everything | 103/103 |
+| `python -m a2m` | a dict in memory | everything | 114/114 |
 | [server_minimal.py](implementations/server_minimal.py) | a dict, stdlib only | `core` only | 37/37 |
 | [server_minimal.ts](implementations/server_minimal.ts) | a Map, **TypeScript** | `core` + `keys` | 47/47 |
 | [server_readonly.py](implementations/server_readonly.py) | a fixed corpus, **read-only** | `core` only | 32/32 |
-| [store_sqlite.py](implementations/store_sqlite.py) | SQLite + sqlite-vec | everything | 103/103 |
-| [store_postgres.py](implementations/store_postgres.py) | **PostgreSQL + pgvector** | everything | 103/103 |
-| [server_federated.py](implementations/server_federated.py) | four A2M servers | everything | 95/95 |
+| [store_sqlite.py](implementations/store_sqlite.py) | SQLite + sqlite-vec | everything | 114/114 |
+| [store_postgres.py](implementations/store_postgres.py) | **PostgreSQL + pgvector** | everything | 114/114 |
+| [server_federated.py](implementations/server_federated.py) | four A2M servers | all but `summarize` | 95/95 |
 
 Checks are grouped by capability and skipped when a server does not declare one.
 Declaring a capability and then not honouring it *is* a failure — a client

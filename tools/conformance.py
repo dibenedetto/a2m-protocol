@@ -149,7 +149,8 @@ def test_core(client: Client, report: Report, profile: dict[str, Any]) -> None:
 	declared = set(profile.get("capabilities", []))
 	report.check("declared capabilities are known",
 	             declared <= {"core", "tiers", "salience", "scopes", "sessions",
-	                          "embeddings", "keys", "external", "events", "summarize"},
+	                          "embeddings", "keys", "external", "events", "summarize",
+	                          "prompt"},
 	             declared)
 
 	expect_error(report, "an incompatible protocol is rejected", PROTOCOL_NOT_SUPPORTED,
@@ -828,6 +829,81 @@ def test_summarize(client: Client, report: Report, profile: dict[str, Any]) -> N
 	client.call("memory/forget", {"query": f"summary probe {marker}"})
 
 
+def test_prompt(client: Client, report: Report, profile: dict[str, Any]) -> None:
+	"""Check the 'prompt' capability: text alongside the records, never instead.
+
+	The rule that matters is that asking for text changes nothing else. A server
+	that returned different records, or fewer, when a prompt was requested would
+	make the capability unusable for anything that also needs the records — and
+	the records are the reason A2M returns records (spec §4.16).
+
+	Args:
+		client (Client): Connected to the server under test.
+		report (Report): Where to record results.
+		profile (dict): The server's describe result.
+	"""
+	print("\n  prompt")
+
+	contract = profile.get("prompt")
+	report.check("describe reports a prompt contract",
+	             isinstance(contract, dict) and isinstance(contract.get("styles"), list), contract)
+	report.check("and 'auto' is among the styles",
+	             isinstance(contract, dict) and "auto" in (contract.get("styles") or []), contract)
+
+	marker = uuid.uuid4().hex
+	tiers  = [t.get("name") for t in profile.get("tiers", []) if t.get("name")]
+	target = next((t.get("name") for t in profile.get("tiers", [])
+	               if t.get("kind") == "semantic"), tiers[-1] if tiers else None)
+
+	client.call("memory/remember", {"records": [
+		{"content": f"prompt probe {marker}: the deploy key rotates every ninety days",
+		 **({"tier": target} if target else {})},
+		{"content": f"prompt probe {marker}: the release branch is cut on thursdays",
+		 **({"tier": target} if target else {})},
+	]})
+
+	plain    = client.call("memory/recall", {"query": f"prompt probe {marker}", "limit": 5})
+	rendered = client.call("memory/recall", {"query": f"prompt probe {marker}", "limit": 5, "prompt": True})
+
+	report.check("the records are still returned in full",
+	             [r.get("id") for r in rendered.get("records", [])] ==
+	             [r.get("id") for r in plain.get("records", [])],
+	             (plain.get("records"), rendered.get("records")))
+	report.check("a prompt string comes back", isinstance(rendered.get("prompt"), str)
+	             and bool(rendered["prompt"]), rendered.get("prompt"))
+	report.check("and the ids it contains", isinstance(rendered.get("prompt_ids"), list)
+	             and bool(rendered["prompt_ids"]), rendered.get("prompt_ids"))
+	report.check("every rendered id is one of the returned records",
+	             set(rendered.get("prompt_ids", [])) <= {r.get("id") for r in rendered.get("records", [])},
+	             rendered.get("prompt_ids"))
+	report.check("the text mentions what was recalled",
+	             marker in rendered.get("prompt", ""), rendered.get("prompt", "")[:120])
+
+	# Not asking must leave no trace of the capability in the result.
+	report.check("a result carries no prompt unless asked",
+	             "prompt" not in plain and "prompt_ids" not in plain, list(plain))
+
+	# A budget drops whole records rather than cutting one in half.
+	tight = client.call("memory/recall", {"query": f"prompt probe {marker}", "limit": 5,
+	                                      "prompt": {"budget": 90}})
+	report.check("a budget is respected", len(tight.get("prompt", "")) <= 90, len(tight.get("prompt", "")))
+	report.check("and it drops whole records rather than truncating one",
+	             len(tight.get("prompt_ids", [])) <= len(rendered.get("prompt_ids", [])),
+	             (tight.get("prompt_ids"), rendered.get("prompt_ids")))
+	for id in tight.get("prompt_ids", []):
+		record = next((r for r in rendered.get("records", []) if r.get("id") == id), None)
+		if record:
+			report.check("a surviving record is rendered whole",
+			             str(record.get("content", "")) in tight.get("prompt", ""), id)
+			break
+
+	# timeline renders too, and a transcript is not a bullet list.
+	replayed = client.call("memory/timeline", {"limit": 5, "prompt": {"style": "transcript"}})
+	report.check("timeline renders as well", isinstance(replayed.get("prompt"), str), replayed.get("prompt"))
+
+	client.call("memory/forget", {"query": f"prompt probe {marker}"})
+
+
 def test_undeclared(client: Client, report: Report, profile: dict[str, Any]) -> None:
 	"""Check that undeclared capabilities answer -32003, not -32601.
 
@@ -972,7 +1048,8 @@ def run(client: Client) -> Report:
 	                          ("scopes", test_scopes), ("sessions", test_sessions),
 	                          ("keys", test_keys), ("embeddings", test_embeddings),
 	                          ("external", test_external), ("events", test_events),
-	                          ("summarize", test_summarize)):
+	                          ("summarize", test_summarize),
+	                          ("prompt", test_prompt)):
 		if capability not in declared:
 			print(f"\n  {capability}")
 			report.skip(f"{capability} suite", "not declared")

@@ -115,6 +115,34 @@ class A2MStorageBackend:
 		return f"{self.namespace}{scope}".rstrip("/") + "/"
 
 
+	def _read_prefix(self, scope_prefix: str = None) -> str | None:
+		"""The key prefix a *read* should use — which is not the one a write uses.
+
+		A namespace scopes writes and deletions, so two crews on one store
+		cannot overwrite or reset each other. It must **not** scope reads: a
+		backend that only finds what it wrote is a private store with extra
+		steps, which is the exact failure A2M exists to remove.
+
+		So an unscoped read reads everything the store is willing to show,
+		including records written by another framework entirely — which is the
+		point of sharing a store. A read naming a scope is confined to that
+		scope beneath this namespace, because then the caller asked.
+
+		This is the same mistake, and the same fix, as the Agno adapter's
+		`namespace=None` (DECISION 023). It was reintroduced here and caught by
+		`tools/test_interop.py` on its first run.
+
+		Args:
+			scope_prefix (str, optional): A CrewAI scope path.
+
+		Returns:
+			str | None: A key prefix, or None to search the whole store.
+		"""
+		if scope_prefix is None:
+			return None
+		return self._prefix(scope_prefix)
+
+
 	def _key(self, scope: str, id: str) -> str:
 		"""The key addressing one record.
 
@@ -201,17 +229,22 @@ class A2MStorageBackend:
 		)
 
 
-	def _under(self, scope_prefix: str = None, where: dict[str, Any] = None) -> list[dict[str, Any]]:
+	def _under(self, scope_prefix: str = None, where: dict[str, Any] = None,
+	           mine_only: bool = False) -> list[dict[str, Any]]:
 		"""Every wire record in a scope subtree, oldest first.
 
 		Args:
 			scope_prefix (str, optional): The subtree.
 			where (dict, optional): A metadata filter to apply server-side.
+			mine_only (bool, optional): Confine to this namespace regardless of
+				scope. Deletion and reset pass True; reads never do, so that a
+				crew can see what other frameworks wrote.
 
 		Returns:
 			list[dict]: Records in wire form.
 		"""
-		return self.client.timeline(limit=0, key_prefix=self._prefix(scope_prefix), where=where)
+		prefix = self._prefix(scope_prefix) if mine_only else self._read_prefix(scope_prefix)
+		return self.client.timeline(limit=0, key_prefix=prefix, where=where)
 
 
 	# ------------------------------------------------------- StorageBackend
@@ -260,7 +293,7 @@ class A2MStorageBackend:
 			None,
 			limit      = want,
 			embedding  = list(query_embedding),
-			key_prefix = self._prefix(scope_prefix),
+			key_prefix = self._read_prefix(scope_prefix),
 			where      = metadata_filter,
 			min_score  = min_score,
 		)
@@ -300,7 +333,7 @@ class A2MStorageBackend:
 		wanted = set(record_ids or [])
 		doomed = []
 
-		for wire in self._under(scope_prefix, where=metadata_filter):
+		for wire in self._under(scope_prefix, where=metadata_filter, mine_only=True):
 			record = self._to_record(wire)
 			if wanted and record.id not in wanted:
 				continue

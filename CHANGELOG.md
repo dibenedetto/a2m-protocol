@@ -21,7 +21,7 @@ The first version of the protocol intended for anyone else to implement.
   stdio framing, so a runtime that speaks one needs no second code path.
 - **A five-method core**, with everything else in capabilities a server
   declares and a client checks: `tiers`, `salience`, `scopes`, `sessions`,
-  `keys`, `embeddings`, `external`, `events`.
+  `keys`, `embeddings`, `external`, `events`, `summarize`, `prompt`.
 - **Four memory kinds** — `working`, `episodic`, `semantic`, `procedural` —
   with spilling and promotion as separate forces, and nothing spilling into
   `procedural`.
@@ -38,6 +38,14 @@ The first version of the protocol intended for anyone else to implement.
 - **Events**, as a cursor any transport can carry, with push as an optional
   layer where a notification can be delivered. Volume is coalesced: a
   consolidation moving ten thousand records is one event.
+- **Summarize**, distilling a set of records into a durable statement on
+  demand. It writes ordinary records, never deletes its sources, and replaces
+  rather than accumulates when given a key.
+- **Prompt rendering**, as an optional field beside the records rather than
+  instead of them — so a client in any language, including an n8n HTTP node,
+  gets prompt-ready text without a helper library in its own language.
+- **Read-only servers are conformant** (§2.1), which is what makes exposing an
+  existing corpus a checkable claim rather than an assurance.
 - **An executable conformance suite** that speaks only the protocol and never
   imports the server it tests.
 
@@ -56,7 +64,7 @@ remains in git history at commit `7ca383c` and is recoverable with
 | embeddings | **caller-owned**, stored verbatim | **both** — caller-owned, or server-side |
 | record kinds | `external` as a fifth *type* | `external` as a record *property*, legal in any tier |
 | events | `WS /subscribe` | cursor polling on every transport, push where one can carry it |
-| conformance | — | executable suite, six passing implementations |
+| conformance | — | executable suite, seven passing implementations |
 
 The four memory kinds survived unchanged, having been arrived at twice
 independently — which is the strongest evidence in this repository that they are
@@ -85,4 +93,7 @@ every transport (DECISION 026).
   its backends over the protocol.
 - `bridge_mcp.py`, exposing any A2M server as an MCP tool server.
 - Adapters for LangChain, Agno, CrewAI and AutoGen; an importable n8n workflow.
+- A cross-framework interop matrix: every adapter writes, every adapter reads,
+  and the grid must be complete. Its first run found the CrewAI adapter could
+  only read what it had written itself.
 - Packaging as `a2m-protocol`, standard library only, Python 3.10+.

@@ -22,6 +22,7 @@ a2m/text.py                Unicode tokenizer, CJK segmentation, per-language sto
 a2m/retrieval.py           Scorer seam: lexical, embedding, hybrid; LLM consolidator
 a2m/memory.py              the reference stack: records, tiers, consolidation
 a2m/protocol.py            reference A2M server + client (all capabilities)
+a2m/prompt.py              records -> prompt text. Tier-aware, budgeted, no model.
 a2m/__init__.py            re-exports the surface implementers reach for
 a2m/__main__.py            `python -m a2m` — the reference server on the CLI
 
@@ -44,6 +45,8 @@ tools/test_a2m.py          implementation tests
 tools/demo_stack.py        both topologies, end to end
 tools/bench_embeddings.py  which embedding model, measured
 tools/check_stdlib_only.py walks every import; CI fails on a stray dependency
+tools/test_interop.py      N×N: every adapter writes, every adapter reads
+tools/check_n8n.py         replays the n8n workflow's bodies at a live server
 
 www/render.py              renders spec + DECISIONS to www/public/. Stdlib only.
 www/index.html             the landing page, hand-written
@@ -78,10 +81,10 @@ Everything runs from the repository root.
 python -m tools.check_stdlib_only     # no dependency crept in anywhere
 python -m tools.test_a2m              # 245 checks, offline, no test runner
 python -m doctest a2m/memory.py a2m/text.py a2m/retrieval.py a2m/jsonrpc.py a2m/protocol.py  # examples are real
-python -m tools.conformance --stdio python -m a2m                            # 103/103
-python -m tools.conformance --stdio python implementations/server_minimal.py # 37/37, 10 skipped
+python -m tools.conformance --stdio python -m a2m                            # 114/114
+python -m tools.conformance --stdio python implementations/server_minimal.py # 37/37, 11 skipped
 python -m tools.conformance --stdio python implementations/server_readonly.py # 32/32 read-only
-python -m tools.conformance --stdio python -m implementations.store_sqlite s.db      # 103/103
+python -m tools.conformance --stdio python -m implementations.store_sqlite s.db      # 114/114
 python -m tools.conformance --stdio python -m implementations.server_federated r/    # 95/95 (no summarizer)
 python -m tools.conformance --stdio node --experimental-strip-types implementations/server_minimal.ts  # 47/47
 python -m tools.demo_stack && python -m tools.demo_stack --router   # 37 and 33
@@ -90,7 +93,7 @@ python -m tools.demo_stack && python -m tools.demo_stack --router   # 37 and 33
 docker run -d --name a2m-pg -e POSTGRES_PASSWORD=a2m -e POSTGRES_USER=a2m \
   -e POSTGRES_DB=a2m -p 55432:5432 pgvector/pgvector:pg16
 python -m tools.conformance --stdio python -m implementations.store_postgres \
-  postgresql://a2m:a2m@127.0.0.1:55432/a2m                          # 103/103
+  postgresql://a2m:a2m@127.0.0.1:55432/a2m                          # 114/114
 python -m tools.conformance --stdio python -m implementations.server_federated \
   postgresql://a2m:a2m@127.0.0.1:55432/a2mfed --backend postgres    # 95/95
 # (the a2mfed database must exist: docker exec a2m-pg psql -U a2m -d a2m -c "CREATE DATABASE a2mfed")
@@ -101,7 +104,7 @@ python implementations/client.py --stdio python implementations/server_minimal.p
 Over stdio the full-capability targets include push delivery end to end. Over
 HTTP the suite instead checks that push is honestly refused, plus the binding
 checks stdio cannot reach — Origin, version header, 405, well-known — for
-**103/103** there too. Start a server with `--http` first, then
+**114/114** there too. Start a server with `--http` first, then
 `python -m tools.conformance --http http://127.0.0.1:8778/`.
 
 **A change is not done until all eight conformance targets still pass.** They

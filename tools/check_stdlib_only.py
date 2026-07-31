@@ -50,6 +50,10 @@ ALLOWED = {
 	"implementations/store_postgres.py"     : {"psycopg"},
 	# The example whose entire point is that two frameworks meet on one store.
 	"examples/cross_framework.py"           : {"agno", "langchain_core"},
+	# The interop matrix, which must import every framework to prove they share
+	# a store. Nothing imports it, and it is not on the default test path -- it
+	# has a CI job of its own, on the one Python version all four support.
+	"tools/test_interop.py"                 : {"agno", "crewai", "autogen_core", "langchain_core"},
 }
 
 # Optional dependencies the reference implementation may import *lazily*, inside

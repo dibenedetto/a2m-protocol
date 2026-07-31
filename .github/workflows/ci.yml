@@ -190,6 +190,46 @@ jobs:
           grep -q "${{ matrix.target.expect }}/${{ matrix.target.expect }} checks passed" report.txt \
             || { echo "::error::expected ${{ matrix.target.expect }} checks"; exit 1; }
 
+  # The claim on the first line of the README: agents from different frameworks
+  # share one memory. It went untested until tools/test_interop.py existed, and
+  # its first run found a real bug -- the CrewAI adapter could only read what it
+  # had written itself. A framework changing its interface is the likeliest way
+  # this repository breaks, and this is the only job that would notice.
+  #
+  # Python 3.12 because CrewAI cannot run on 3.14: its chromadb dependency uses
+  # pydantic v1. Kept separate from the stdlib jobs so the fast feedback loop
+  # never waits on a large dependency install.
+  interop:
+    name: cross-framework interop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install every framework A2M claims to join
+        run: pip install langchain-core agno crewai autogen-core
+
+      - name: Every adapter writes, every adapter reads
+        run: |
+          python -m tools.test_interop | tee report.txt
+          grep -q "covered: langchain, agno, crewai, autogen, raw" report.txt \
+            || { echo "::error::an adapter was skipped -- the matrix is smaller than it claims"; exit 1; }
+
+      - name: Two frameworks over one store, end to end
+        run: python -m examples.cross_framework
+
+      - name: The n8n workflow's requests are valid A2M
+        run: |
+          python -m a2m --http 8778 &
+          for _ in $(seq 1 30); do
+            python -c "import socket,sys; sys.exit(0 if socket.socket().connect_ex(('127.0.0.1',8778))==0 else 1)" && break
+            sleep 1
+          done
+          python -m tools.check_n8n
+
   # The package an implementer actually installs. Building it is not enough --
   # what matters is that it imports and works from a directory that is not the
   # repository, which is where a missing module or a stray relative path shows.

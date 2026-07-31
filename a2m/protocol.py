@@ -46,6 +46,7 @@ from   a2m.jsonrpc import (
 	make_notification, serve_http, serve_stdio,
 )
 from   a2m.memory  import MemoryStack, to_rfc3339
+from   a2m.prompt  import render
 
 
 A2M_VERSION = "a2m/0.1"
@@ -81,6 +82,8 @@ A2M_CAPABILITIES = {
 	"external"   : [],
 	"events"     : ["memory/events", "memory/events/subscribe", "memory/events/unsubscribe"],
 	"summarize"  : ["memory/summarize"],
+	# Adds no method: a parameter and a result field on recall and timeline.
+	"prompt"     : [],
 }
 
 A2M_METHODS = [method for methods in A2M_CAPABILITIES.values() for method in methods]
@@ -424,6 +427,7 @@ class MemoryServer:
 			"embeddings"   : self._embedding_profile() if self.supports("embeddings") else None,
 			"events"       : {"push": self._push_available()} if self.supports("events") else None,
 			"summarize"    : {"model": self.summarizer_model} if self.supports("summarize") else None,
+			"prompt"       : {"styles": ["auto", "facts", "transcript"]} if self.supports("prompt") else None,
 			"scorer"       : described.get("scorer", None),
 			"total"        : described.get("total", 0),
 			"working"      : described.get("working", None),
@@ -534,6 +538,7 @@ class MemoryServer:
 		embedding : list[float]    = None,
 		key_prefix: str            = None,
 		embeddings: bool           = False,
+		prompt    : Any            = None,
 		**ignored : Any,
 	) -> dict[str, Any]:
 		"""Handle 'memory/recall' -- relevance-ordered search.
@@ -575,12 +580,12 @@ class MemoryServer:
 		except KeyError as exc:
 			raise JsonRpcError(UNKNOWN_TIER, str(exc))
 
-		return {"records": [record.to_dict(score, embeddings) for record, score in scored]}
+		return self._rendered({"records": [record.to_dict(score, embeddings) for record, score in scored]}, prompt)
 
 
 	def timeline(self, tier: str = None, limit: int = 0, owner: str = None,
 	             where: dict[str, Any] = None, key_prefix: str = None,
-	             embeddings: bool = False, **ignored: Any) -> dict[str, Any]:
+	             embeddings: bool = False, prompt: Any = None, **ignored: Any) -> dict[str, Any]:
 		"""Handle 'memory/timeline' -- creation-ordered read.
 
 		Args:
@@ -599,7 +604,7 @@ class MemoryServer:
 
 		records = self.stack.timeline(tier=tier, limit=limit, agent=owner,
 		                              where=where, key_prefix=key_prefix)
-		return {"records": [record.to_dict(embedding=embeddings) for record in records]}
+		return self._rendered({"records": [record.to_dict(embedding=embeddings) for record in records]}, prompt)
 
 
 	def reinforce(self, ids: list[str], amount: float = 0.5, owner: str = None, **ignored: Any) -> dict[str, Any]:
@@ -755,6 +760,42 @@ class MemoryServer:
 
 		record = self.stack.by_key(key, agent=owner)
 		return {"record": record.to_dict(embedding=embeddings) if record else None}
+
+
+	def _rendered(self, result: dict[str, Any], prompt: Any) -> dict[str, Any]:
+		"""Attach rendered prompt text to a result, when the caller asked (spec §4.16).
+
+		`records` is returned unchanged either way. The text is additional and
+		never a replacement -- a result carrying only text would be unreadable
+		to every consumer that is not a language model.
+
+		A server that does not declare `prompt` ignores the parameter rather
+		than refusing it, because the rendering is additive: the client has the
+		records and can render them itself. That is the opposite of `tier` on a
+		write, where dropping the field silently would lose the caller's
+		meaning.
+
+		Args:
+			result (dict): The result being returned, carrying 'records'.
+			prompt: What the caller asked for -- True, an options object, or
+				None for nothing.
+
+		Returns:
+			dict: The same result, plus 'prompt' and 'prompt_ids' when asked.
+		"""
+		if not prompt or not self.supports("prompt"):
+			return result
+
+		options = prompt if isinstance(prompt, dict) else {}
+		text, used = render(
+			result.get("records") or [],
+			budget  = int(options.get("budget") or 0),
+			cite    = bool(options.get("cite", False)),
+			style   = str(options.get("style") or "auto"),
+			kinds   = {tier["name"]: tier.get("kind") for tier in self.stack.describe().get("tiers", [])},
+		)
+
+		return dict(result, prompt=text, prompt_ids=used)
 
 
 	def _embedding_profile(self) -> dict[str, Any]:
@@ -1268,6 +1309,7 @@ class MemoryClient:
 		embedding : list[float]    = None,
 		key_prefix: str            = None,
 		embeddings: bool           = False,
+		prompt    : Any            = None,
 	) -> list[dict[str, Any]]:
 		"""Search by relevance.
 
@@ -1284,6 +1326,8 @@ class MemoryClient:
 			list[dict]: Records in wire form, descending by score.
 		"""
 		params = {"limit": limit, "min_score": min_score}
+		if prompt is not None:
+			params["prompt"] = prompt
 		if embedding is not None:
 			params["embedding"] = list(embedding)
 		if key_prefix is not None:
@@ -1297,11 +1341,54 @@ class MemoryClient:
 		if where is not None:
 			params["where"] = where
 
-		return self.client.call("memory/recall", self._scoped(params)).get("records", [])
+		result = self.client.call("memory/recall", self._scoped(params))
+		# The rendered text rides on the returned list rather than changing the
+		# return type, so asking for a prompt never breaks a caller that was
+		# only ever iterating records.
+		records = result.get("records", [])
+		if "prompt" in result:
+			self.last_prompt     = result["prompt"]
+			self.last_prompt_ids = result.get("prompt_ids", [])
+		return records
+
+
+	def recall_prompt(self, query: str, budget: int = 0, cite: bool = False,
+	                  style: str = "auto", **filters: Any) -> tuple[str, list[str]]:
+		"""Recall, and get the text to put in a model's prompt.
+
+		Uses the server's renderer when it declares `prompt`, and falls back to
+		rendering locally when it does not — so this works against every A2M
+		server and the caller never has to branch on a capability.
+
+		Args:
+			query (str): What to rank against.
+			budget (int, optional): Maximum characters. 0 means no limit.
+			cite (bool, optional): Mark each entry with its uri or key.
+			style (str, optional): 'facts', 'transcript' or 'auto'.
+			**filters: Anything else `recall` takes.
+
+		Returns:
+			tuple[str, list[str]]: The rendered block, and the ids it contains —
+			which are what to pass to `reinforce`, since they are what the model
+			actually saw.
+
+		Example:
+			block, used = memory.recall_prompt("deploy key", budget=400)
+			memory.reinforce(used)
+		"""
+		options = {"style": style, "budget": budget, "cite": cite}
+
+		if self.supports("prompt"):
+			records = self.recall(query, prompt=options, **filters)
+			return getattr(self, "last_prompt", ""), getattr(self, "last_prompt_ids", [])
+
+		kinds = {tier["name"]: tier.get("kind") for tier in self.describe().get("tiers", [])}
+		return render(self.recall(query, **filters), budget=budget, cite=cite, style=style, kinds=kinds)
 
 
 	def timeline(self, tier: str = None, limit: int = 0, where: dict[str, Any] = None,
-	             key_prefix: str = None, embeddings: bool = False) -> list[dict[str, Any]]:
+	             key_prefix: str = None, embeddings: bool = False,
+	             prompt: Any = None) -> list[dict[str, Any]]:
 		"""Read records in creation order.
 
 		Args:
@@ -1322,8 +1409,14 @@ class MemoryClient:
 			params["key_prefix"] = key_prefix
 		if embeddings:
 			params["embeddings"] = True
+		if prompt is not None:
+			params["prompt"] = prompt
 
-		return self.client.call("memory/timeline", self._scoped(params)).get("records", [])
+		result = self.client.call("memory/timeline", self._scoped(params))
+		if "prompt" in result:
+			self.last_prompt     = result["prompt"]
+			self.last_prompt_ids = result.get("prompt_ids", [])
+		return result.get("records", [])
 
 
 	def reinforce(self, ids: list[str], amount: float = 0.5) -> int:

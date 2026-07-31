@@ -24,36 +24,95 @@
         "keys",
         "external",
         "events",
-        "summarize"
+        "summarize",
+        "prompt"
+      ]
+    },
+    "promptOption": {
+      "description": "true for the server's defaults, or an object configuring the rendering.",
+      "oneOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "style": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "facts",
+                "transcript"
+              ]
+            },
+            "budget": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "cite": {
+              "type": "boolean"
+            }
+          }
+        }
       ]
     },
     "summarizeParams": {
       "type": "object",
       "description": "At least one selector -- ids, query, tier, where or key_prefix -- must be present.",
       "anyOf": [
-        { "required": ["ids"] },
-        { "required": ["query"] },
-        { "required": ["tier"] },
-        { "required": ["where"] },
-        { "required": ["key_prefix"] }
+        {
+          "required": [
+            "ids"
+          ]
+        },
+        {
+          "required": [
+            "query"
+          ]
+        },
+        {
+          "required": [
+            "tier"
+          ]
+        },
+        {
+          "required": [
+            "where"
+          ]
+        },
+        {
+          "required": [
+            "key_prefix"
+          ]
+        }
       ],
       "properties": {
         "ids": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
-        "query": { "type": "string" },
+        "query": {
+          "type": "string"
+        },
         "tier": {
           "type": "string",
           "description": "Selector: which tier to read from."
         },
-        "where": { "$ref": "#/$defs/where" },
-        "key_prefix": { "type": "string" },
+        "where": {
+          "$ref": "#/$defs/where"
+        },
+        "key_prefix": {
+          "type": "string"
+        },
         "limit": {
           "type": "integer",
           "minimum": 0
         },
-        "owner": { "type": "string" },
+        "owner": {
+          "type": "string"
+        },
         "into": {
           "type": "string",
           "description": "Destination tier for the summary."
@@ -75,7 +134,9 @@
       "properties": {
         "records": {
           "type": "array",
-          "items": { "$ref": "#/$defs/record" },
+          "items": {
+            "$ref": "#/$defs/record"
+          },
           "description": "The summary records written. Empty when the server declined."
         },
         "read": {
@@ -585,6 +646,21 @@
             }
           }
         },
+        "prompt": {
+          "type": "object",
+          "description": "Present when the prompt capability is declared.",
+          "required": [
+            "styles"
+          ],
+          "properties": {
+            "styles": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
         "summarize": {
           "type": "object",
           "description": "Present when the summarize capability is declared.",
@@ -593,7 +669,10 @@
           ],
           "properties": {
             "model": {
-              "type": ["string", "null"],
+              "type": [
+                "string",
+                "null"
+              ],
               "description": "What produces the summary, or null when no model is involved."
             }
           }
@@ -700,6 +779,9 @@
             "type": "number"
           },
           "minItems": 1
+        },
+        "prompt": {
+          "$ref": "#/$defs/promptOption"
         }
       }
     },
@@ -714,6 +796,17 @@
           "items": {
             "$ref": "#/$defs/record"
           }
+        },
+        "prompt": {
+          "type": "string",
+          "description": "capability: prompt. Present only when the caller asked."
+        },
+        "prompt_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "capability: prompt. The records the rendered block contains."
         }
       }
     },
@@ -738,6 +831,9 @@
         },
         "embeddings": {
           "type": "boolean"
+        },
+        "prompt": {
+          "$ref": "#/$defs/promptOption"
         }
       }
     },
