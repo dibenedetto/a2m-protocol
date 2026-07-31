@@ -189,17 +189,20 @@ def main() -> int:
 	# working memory never does, because it turns over before anything searches it.
 	from implementations.store_sqlite import open_stack
 
-	# ignore_cleanup_errors because SqliteMemoryStack holds its connection for
-	# the life of the process and exposes no close(); on Windows the open handle
-	# blocks removing the directory. See the note in HANDOFF.md.
-	with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+	with tempfile.TemporaryDirectory() as directory:
 		stack  = open_stack(str(pathlib.Path(directory) / "memory.db"), embed=stub_embedder)
-		memory = connect_local(stack)
-		facts(memory)
+		try:
+			memory = connect_local(stack)
+			facts(memory)
 
-		found = memory.recall(query="how often are credentials cycled?")
-		check("a SQL store ranks with the embedder it was given",
-		      found and "ninety days" in found[0]["content"], found)
+			found = memory.recall(query="how often are credentials cycled?")
+			check("a SQL store ranks with the embedder it was given",
+			      found and "ninety days" in found[0]["content"], found)
+		finally:
+			# Both SQL stores inherit close() from TieredMemoryStack. Skipping it
+			# leaves the database handle open, which on Windows blocks removing
+			# the directory it lives in.
+			stack.close()
 
 	print("\n6. which model, and why that one")
 

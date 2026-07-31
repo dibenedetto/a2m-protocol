@@ -715,6 +715,70 @@ def test_external() -> None:
 		check("a uri without the capability is refused", exc.code == -32003, exc.code)
 
 
+def test_summarize() -> None:
+	print("== summarize ==")
+
+	from a2m           import MemoryClient
+	from a2m.jsonrpc   import Client, LocalTransport
+	from a2m.retrieval import extractive_summarizer
+
+	summarize = extractive_summarizer(keep=1)
+	records   = [
+		MemoryStack().remember("the deploy key rotates every ninety days. it is fine."),
+		MemoryStack().remember("it is fine. it is fine."),
+	]
+	picked = summarize(records, "semantic")
+	check("the extractive summarizer keeps the informative sentence",
+	      picked == ["the deploy key rotates every ninety days."], picked)
+	check("and declines when there is nothing to keep",
+	      extractive_summarizer()([MemoryStack().remember("a b")], "semantic") is None)
+
+	# Spec §2: a server must not advertise a capability it cannot implement.
+	plain = connect_local(MemoryStack())
+	check("a stack with no summarizer does not declare summarize",
+	      "summarize" not in plain.capabilities(), plain.capabilities())
+
+	server = MemoryServer(stack=MemoryStack(), summarize_fn=summarize, summarizer_model="extractive")
+	memory = MemoryClient(Client(LocalTransport(server.dispatcher)))
+	check("a stack with one does declare it", "summarize" in memory.capabilities(), memory.capabilities())
+	check("and reports what is behind it",
+	      memory.describe()["summarize"] == {"model": "extractive"}, memory.describe().get("summarize"))
+
+	ids = memory.remember(
+		"the deploy key rotates every ninety days. rotation is announced early.",
+		tier = "semantic",
+	)
+	result = memory.summarize(ids=ids, into="semantic")
+	check("summarize reports what it read and wrote",
+	      result["read"] == 1 and result["written"] == 1, result)
+	check("the summary is an ordinary record",
+	      result["records"] and result["records"][0]["tier"] == "semantic", result)
+	check("it records what it came from",
+	      result["records"][0]["metadata"]["summarized_from"] == ids, result["records"][0])
+
+	# Spec §4.15: consolidation may delete what it rewrites; this must not.
+	check("the sources survive", memory.recall(query="deploy key rotates") != [], "sources were deleted")
+
+	# A key turns an accumulating summary into a maintained one.
+	memory.summarize(ids=ids, into="semantic", key="wiki/deploys")
+	memory.summarize(ids=ids, into="semantic", key="wiki/deploys")
+	held = memory.timeline(key_prefix="wiki/deploys")
+	check("summarizing to a key replaces rather than accumulates", len(held) == 1, held)
+	check("and advances the revision", held and held[0]["revision"] >= 1, held)
+
+	empty = memory.summarize(query="nothing here matches at all zzzz")
+	check("a selector matching nothing is not an error",
+	      empty["written"] == 0 and empty["records"] == [], empty)
+
+	try:
+		memory.summarize()
+		check("summarize with no selector is refused", False)
+	except JsonRpcError as exc:
+		check("summarize with no selector is refused", exc.code == -32602, exc.code)
+
+	memory.close()
+
+
 def test_events() -> None:
 	print("== events ==")
 
@@ -994,6 +1058,7 @@ def main() -> int:
 	test_keys()
 	test_caller_embeddings()
 	test_external()
+	test_summarize()
 	test_events()
 	test_a2m_local()
 	test_a2m_spec()

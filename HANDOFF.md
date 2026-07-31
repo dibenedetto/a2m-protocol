@@ -152,9 +152,11 @@ running both the floor and the ceiling so it cannot silently rise again. Worth
 knowing because the same mistake — an interpreter requirement nobody measured —
 is easy to reintroduce.
 
-Also outstanding, minor: `SqliteMemoryStack` exposes no `close()` while
-`PgMemoryStack` does, so on Windows an open handle blocks removing a temp
-directory. Two examples work around it with `ignore_cleanup_errors=True`.
+**Correction to an earlier note in this file:** it claimed `SqliteMemoryStack`
+exposes no `close()`. That was wrong — `close()` lives on the shared
+`TieredMemoryStack` base in `implementations/store.py`, so both SQL stores have
+it. The temp-directory failure that prompted the note was two examples not
+*calling* it; they now do.
 
 ## 6. The promotion plan
 

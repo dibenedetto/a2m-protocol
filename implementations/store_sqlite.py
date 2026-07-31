@@ -42,7 +42,7 @@ from   typing                import Any, Callable
 
 from   a2m                   import A2M_VERSION, MemoryServer, serve_a2m_http, serve_a2m_stdio
 from   a2m.memory            import MemoryRecord, MemoryTier, recency
-from   a2m.retrieval         import cosine
+from   a2m.retrieval         import cosine, extractive_summarizer
 from   implementations.store import TierStore, TieredMemoryStack, pack, single_tier, unpack
 
 
@@ -808,7 +808,9 @@ def main() -> int:
 		name  = f"a2m-sqlite:{kind}"
 
 	stack  = open_stack(path, embed=embed, tiers=tiers)
-	server = MemoryServer(stack=stack, name=name)
+	# An extractive summarizer needs no model, so `summarize` is declared and
+	# exercised here exactly as it is by the reference server (spec §4.15).
+	server = MemoryServer(stack=stack, name=name, summarize_fn=extractive_summarizer())
 
 	if "--http" in argv:
 		index = argv.index("--http")

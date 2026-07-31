@@ -149,7 +149,7 @@ def test_core(client: Client, report: Report, profile: dict[str, Any]) -> None:
 	declared = set(profile.get("capabilities", []))
 	report.check("declared capabilities are known",
 	             declared <= {"core", "tiers", "salience", "scopes", "sessions",
-	                          "embeddings", "keys", "external", "events"},
+	                          "embeddings", "keys", "external", "events", "summarize"},
 	             declared)
 
 	expect_error(report, "an incompatible protocol is rejected", PROTOCOL_NOT_SUPPORTED,
@@ -746,6 +746,88 @@ def test_events(client: Client, report: Report, profile: dict[str, Any]) -> None
 		report.skip("push delivery checks", "push is not available on this connection")
 
 
+def test_summarize(client: Client, report: Report, profile: dict[str, Any]) -> None:
+	"""Check the 'summarize' capability: it writes, it never deletes, it may decline.
+
+	The rule that matters is that the sources survive. Consolidation **may**
+	delete what it rewrites; this method **must not** (spec §4.15). A caller
+	that lost its episodic history to a summary it asked for would have no way
+	to get it back, and no reason to expect it.
+
+	Args:
+		client (Client): Connected to the server under test.
+		report (Report): Where to record results.
+		profile (dict): The server's describe result.
+	"""
+	print("\n  summarize")
+
+	contract = profile.get("summarize")
+	report.check("describe reports a summarize contract",
+	             isinstance(contract, dict) and "model" in contract, contract)
+
+	expect_error(report, "summarize with no selector is refused", INVALID_PARAMS,
+	             lambda: client.call("memory/summarize", {}))
+
+	marker  = uuid.uuid4().hex
+	tiers   = [t.get("name") for t in profile.get("tiers", []) if t.get("name")]
+	durable = next((t.get("name") for t in profile.get("tiers", [])
+	                if t.get("kind") == "semantic"), tiers[-1] if tiers else None)
+
+	written = client.call("memory/remember", {"records": [
+		{"content": f"summary probe {marker}: the deploy key rotates every ninety days",
+		 **({"tier": durable} if durable else {})},
+		{"content": f"summary probe {marker}: rotation is announced a week ahead",
+		 **({"tier": durable} if durable else {})},
+	]})
+	ids = written.get("ids", [])
+
+	result = client.call("memory/summarize", dict(
+		{"ids": ids}, **({"into": durable} if durable else {})))
+
+	report.check("summarize reports what it read and wrote",
+	             isinstance(result.get("read"), int) and isinstance(result.get("written"), int), result)
+	report.check("and returns the records it wrote",
+	             isinstance(result.get("records"), list)
+	             and len(result["records"]) == result.get("written"), result)
+	report.check("it read the records it was given", result.get("read") == len(ids), result)
+
+	# The rule this suite exists to enforce.
+	survivors = client.call("memory/recall", {"query": f"summary probe {marker}", "limit": 10}).get("records", [])
+	report.check("the source records still exist afterwards",
+	             all(any(r.get("id") == id for r in survivors) for id in ids),
+	             [r.get("id") for r in survivors])
+
+	for summary in result.get("records", []):
+		report.check("a summary is an ordinary record",
+		             isinstance(summary.get("id"), str) and isinstance(summary.get("content"), str)
+		             and is_rfc3339(summary.get("created_at")), summary)
+		break
+
+	# Declining is an answer, not an error: a selector matching nothing must
+	# come back empty rather than raising.
+	nothing = client.call("memory/summarize", {"query": f"nothing matches this {uuid.uuid4().hex}"})
+	report.check("a selector matching nothing is not an error",
+	             nothing.get("written") == 0 and nothing.get("records") == [], nothing)
+
+	# With `keys`, a summary can be maintained at an address instead of piling up.
+	if "keys" in set(profile.get("capabilities", [])):
+		key = f"conformance/summary/{marker}"
+		first  = client.call("memory/summarize", dict({"ids": ids, "key": key},
+		                                              **({"into": durable} if durable else {})))
+		second = client.call("memory/summarize", dict({"ids": ids, "key": key},
+		                                              **({"into": durable} if durable else {})))
+		held = client.call("memory/timeline", {"key_prefix": key}).get("records", [])
+		if first.get("written") and second.get("written"):
+			report.check("summarizing to the same key replaces rather than accumulates",
+			             len(held) == 1, held)
+		else:
+			report.skip("summarize to a key", "the server declined, so there is nothing to replace")
+
+		client.call("memory/forget", {"key_prefix": key})
+
+	client.call("memory/forget", {"query": f"summary probe {marker}"})
+
+
 def test_undeclared(client: Client, report: Report, profile: dict[str, Any]) -> None:
 	"""Check that undeclared capabilities answer -32003, not -32601.
 
@@ -770,6 +852,7 @@ def test_undeclared(client: Client, report: Report, profile: dict[str, Any]) -> 
 		("keys"    , "memory/fetch"        , {"key": "x/y"}),
 		("events"  , "memory/events"       , {}),
 		("events"  , "memory/events/subscribe", {}),
+		("summarize", "memory/summarize"   , {"query": "x"}),
 	]
 
 	ran = False
@@ -888,7 +971,8 @@ def run(client: Client) -> Report:
 	for capability, suite in (("tiers", test_tiers), ("salience", test_salience),
 	                          ("scopes", test_scopes), ("sessions", test_sessions),
 	                          ("keys", test_keys), ("embeddings", test_embeddings),
-	                          ("external", test_external), ("events", test_events)):
+	                          ("external", test_external), ("events", test_events),
+	                          ("summarize", test_summarize)):
 		if capability not in declared:
 			print(f"\n  {capability}")
 			report.skip(f"{capability} suite", "not declared")

@@ -194,23 +194,27 @@ def main() -> int:
 	# is the point: a procedure is closer to code than to data.
 	from implementations.store_sqlite import open_stack
 
-	with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as directory:
+	with tempfile.TemporaryDirectory() as directory:
 		path  = pathlib.Path(directory) / "memory.db"
-		disk  = connect_local(open_stack(str(path)))
-		install_skill(disk, "rotate-deploy-key", ROTATE_KEY)
+		stack = open_stack(str(path))
+		try:
+			disk = connect_local(stack)
+			install_skill(disk, "rotate-deploy-key", ROTATE_KEY)
 
-		files = sorted((path.parent / f"{path.stem}.procedural").glob("*.md"))
-		check("the procedure is a file on disk", len(files) == 1, files)
-		check("named after the skill", files and files[0].name.startswith("rotate-deploy-key-"), files)
-		check("holding exactly what was written",
-		      files and files[0].read_text(encoding="utf-8") == ROTATE_KEY, files)
+			files = sorted((path.parent / f"{path.stem}.procedural").glob("*.md"))
+			check("the procedure is a file on disk", len(files) == 1, files)
+			check("named after the skill", files and files[0].name.startswith("rotate-deploy-key-"), files)
+			check("holding exactly what was written",
+			      files and files[0].read_text(encoding="utf-8") == ROTATE_KEY, files)
 
-		# Editing the file is editing the memory -- no write-back, no sync step.
-		files[0].write_text(ROTATE_KEY.replace("one week ahead", "two weeks ahead"), encoding="utf-8")
-		reread = disk.recall(query="rotate the deploy key", tier="procedural", limit=1)
-		check("editing the file changes what is recalled",
-		      reread and "two weeks ahead" in reread[0]["content"], reread)
-		print(f"       {files[0].name}  <- put this directory under version control")
+			# Editing the file is editing the memory -- no write-back, no sync step.
+			files[0].write_text(ROTATE_KEY.replace("one week ahead", "two weeks ahead"), encoding="utf-8")
+			reread = disk.recall(query="rotate the deploy key", tier="procedural", limit=1)
+			check("editing the file changes what is recalled",
+			      reread and "two weeks ahead" in reread[0]["content"], reread)
+			print(f"       {files[0].name}  <- put this directory under version control")
+		finally:
+			stack.close()
 
 	print()
 	print(f"  {len(PASSED)} passed, {len(FAILED)} failed")

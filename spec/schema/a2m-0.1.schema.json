@@ -23,8 +23,70 @@
         "embeddings",
         "keys",
         "external",
-        "events"
+        "events",
+        "summarize"
       ]
+    },
+    "summarizeParams": {
+      "type": "object",
+      "description": "At least one selector -- ids, query, tier, where or key_prefix -- must be present.",
+      "anyOf": [
+        { "required": ["ids"] },
+        { "required": ["query"] },
+        { "required": ["tier"] },
+        { "required": ["where"] },
+        { "required": ["key_prefix"] }
+      ],
+      "properties": {
+        "ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "query": { "type": "string" },
+        "tier": {
+          "type": "string",
+          "description": "Selector: which tier to read from."
+        },
+        "where": { "$ref": "#/$defs/where" },
+        "key_prefix": { "type": "string" },
+        "limit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "owner": { "type": "string" },
+        "into": {
+          "type": "string",
+          "description": "Destination tier for the summary."
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Address for the summary. An occupied key is replaced."
+        }
+      }
+    },
+    "summarizeResult": {
+      "type": "object",
+      "required": [
+        "records",
+        "read",
+        "written"
+      ],
+      "properties": {
+        "records": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/record" },
+          "description": "The summary records written. Empty when the server declined."
+        },
+        "read": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "written": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
     },
     "event": {
       "type": "object",
@@ -520,6 +582,19 @@
             "push": {
               "type": "boolean",
               "description": "Whether memory/events/subscribe works on this connection."
+            }
+          }
+        },
+        "summarize": {
+          "type": "object",
+          "description": "Present when the summarize capability is declared.",
+          "required": [
+            "model"
+          ],
+          "properties": {
+            "model": {
+              "type": ["string", "null"],
+              "description": "What produces the summary, or null when no model is involved."
             }
           }
         },
@@ -1188,6 +1263,15 @@
         "$ref": "#/$defs/eventsUnsubscribeResult"
       },
       "capability": "events"
+    },
+    "memory/summarize": {
+      "params": {
+        "$ref": "#/$defs/summarizeParams"
+      },
+      "result": {
+        "$ref": "#/$defs/summarizeResult"
+      },
+      "capability": "summarize"
     }
   },
   "notifications": {

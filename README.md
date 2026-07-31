@@ -50,6 +50,21 @@ memory.recall(query="how often does the key change?")
 
 The transport changes; the client does not.
 
+**Nothing above calls a model.** Out of the box, ranking is lexical — term
+overlap weighted by inverse document frequency — so it runs offline, costs
+nothing and returns the same answer twice. Embeddings are opt-in, and so is the
+model behind them:
+
+```python
+from a2m.retrieval import make_scorer, ollama_embedder
+
+MemoryStack(scorer=make_scorer("hybrid", embed=ollama_embedder("bge-m3")))
+```
+
+A caller may also bring its **own** vectors, which are stored verbatim and never
+regenerated — that is what lets two frameworks using different models share one
+store. [examples/embedders.py](examples/embedders.py) walks all four options.
+
 ```
 LangChain agent     Agno agent      n8n node        CrewAI crew
       │                   │               │                │
@@ -66,7 +81,7 @@ LangChain agent     Agno agent      n8n node        CrewAI crew
              Relational store              Vector index
           (SQLite / PostgreSQL)       (sqlite-vec / pgvector / …)
 
-  ✓ Shared state   ✓ Persistent across runs   ✓ Semantic search built in
+  ✓ Shared state   ✓ Persistent across runs   ✓ Ranked recall, model optional
 ```
 
 ---
@@ -99,11 +114,22 @@ Ask A2M and you get a record:
   "key": "ops/deploy-key", "revision": 2, "score": 0.72 }
 ```
 
-A model can work with the first. A program cannot: it cannot tell a corrected
-fact from a stale one, restrict a search to one tier, replay a transcript in
-order, or ask the store what it supports before calling it. Those are exactly
-what a framework adapter, a router, or a second agent needs — and keeping them
-is the whole reason A2M is a protocol rather than a tool schema.
+*Couldn't a model just parse the first into the second?* Often, yes — and for an
+agent that is frequently good enough, which is exactly why the bridge below
+exists. But it is the wrong default for three reasons:
+
+- **Not every consumer is a model.** A router merging results from four
+  backends, a framework adapter, a sync job, a conformance suite — none of them
+  has an LLM in the loop, and none should need one to read a memory record.
+- **Parsing is probabilistic; a round-trip is not.** `metadata` has to come back
+  byte-for-byte in structure. A model that reformats a float, drops a null or
+  invents a plausible `revision` has corrupted the store's state, silently.
+- **Text has no contract.** Two memory servers phrase their results differently,
+  so the parser must be written per server — which is the silo A2M exists to
+  remove, rebuilt one layer up.
+
+You also pay an inference call and its latency to recover structure that was
+never lost on the wire.
 
 **So use whichever matches your consumer:**
 
@@ -298,6 +324,15 @@ solves; reading one front to back to learn A2M is the wrong way round.
 ## Running it
 
 Everything runs from the repository root.
+
+**Start with the demo.** [tools/demo_stack.py](tools/demo_stack.py) drives a
+real stack end to end and *checks* each claim rather than narrating it: memories
+outlive the process that wrote them, records flow down the tiers by pressure and
+by merit, two agents share one file without inheriting each other's transcript,
+and a procedure lands on disk as a reviewable file. The same script runs against
+a single SQLite server and against four federated processes — `--router` — with
+no changes, because everything it does goes through `memory/*`. That is the
+protocol boundary being load-bearing rather than decorative.
 
 ```bash
 python -m tools.test_a2m                       # 232 checks, offline

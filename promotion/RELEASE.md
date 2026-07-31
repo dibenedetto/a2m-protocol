@@ -87,6 +87,9 @@ uv pip install --python <a fresh venv> dist\a2m_protocol-0.1.0-py3-none-any.whl
 ```
 
 - [ ] The wheel imports and works **from a directory that is not the repository**.
+- [ ] Anything opening a SQL store calls `stack.close()` when done — the handle
+      is held for the life of the process otherwise, which on Windows blocks
+      deleting the file.
 - [ ] `a2m --help` prints usage rather than starting a server.
 - [ ] The floor holds: repeat the install on Python 3.10.
 - [ ] `twine check dist/*` passes — this is what catches a README that renders

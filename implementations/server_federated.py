@@ -331,9 +331,34 @@ class MemoryRouter:
 			"memory/events"      : self.events,
 			"memory/events/subscribe"  : self.events_subscribe,
 			"memory/events/unsubscribe": self.events_unsubscribe,
+			"memory/summarize"   : self.summarize,
 		}
 		for method, handler in handlers.items():
 			self.dispatcher.register(method, handler)
+
+
+	def summarize(self, **ignored: Any) -> dict[str, Any]:
+		"""Handle 'memory/summarize' -- declined, honestly.
+
+		The router owns policy and the backends own bytes, but summarizing is
+		neither: it needs a summarizer, and this router has none. Declaring the
+		capability and then declining every call would be indistinguishable
+		from "nothing durable to say" (spec §4.15), which is a lie a client
+		cannot detect.
+
+		Registering the method anyway is what makes the refusal `-32003` rather
+		than `-32601`, which a client cannot tell from a typo (spec §2).
+
+		Args:
+			**ignored: Unrecognised parameters are ignored.
+
+		Raises:
+			JsonRpcError: -32003, always.
+		"""
+		raise JsonRpcError(
+			CAPABILITY_NOT_SUPPORTED,
+			"This router does not implement the 'summarize' capability; ask a backend that does",
+		)
 
 
 	# ------------------------------------------------------------------ events

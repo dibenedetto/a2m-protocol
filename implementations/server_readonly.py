@@ -307,6 +307,7 @@ HANDLERS = {
 	"memory/events"      : unsupported("events"),
 	"memory/events/subscribe"  : unsupported("events"),
 	"memory/events/unsubscribe": unsupported("events"),
+	"memory/summarize"   : unsupported("summarize"),
 }
 
 

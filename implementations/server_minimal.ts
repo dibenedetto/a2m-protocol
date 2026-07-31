@@ -396,6 +396,7 @@ const HANDLERS: Record<string, (params: Json) => Json> = {
 	"memory/events": unsupported("events"),
 	"memory/events/subscribe": unsupported("events"),
 	"memory/events/unsubscribe": unsupported("events"),
+	"memory/summarize": unsupported("summarize"),
 };
 
 /** Build a JSON-RPC error response. */

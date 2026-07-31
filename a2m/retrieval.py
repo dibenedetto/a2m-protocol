@@ -19,6 +19,7 @@ an empty verdict correctly recalls nothing.
 
 
 import math
+import re
 
 
 from   typing   import Any, Callable
@@ -583,6 +584,84 @@ def make_scorer(kind: str = "lexical", embed: Callable = None, weights: tuple = 
 		])
 
 	raise ValueError(f"Unknown scorer '{kind}'; expected lexical, embedding or hybrid")
+
+
+def extractive_summarizer(keep: int = 3, min_terms: int = 3) -> Callable:
+	"""A summarizer that needs no model: keep the most informative sentences.
+
+	Spec §4.15 does not say how a summary is produced, and this is the proof
+	that it need not involve a language model. Sentences are ranked by the
+	rarity of the terms they carry across the group being summarized, so a
+	sentence made of words every record shares scores low and a sentence
+	carrying the distinguishing facts scores high.
+
+	Deterministic, offline and free, which is what makes it the right default
+	for the reference server: `summarize` is exercised by every conformance run
+	rather than only where someone has an LLM configured. For a summary that
+	*rewrites* rather than selects, see `llm_consolidator`.
+
+	Args:
+		keep (int, optional): How many sentences to keep at most.
+		min_terms (int, optional): Shortest sentence worth keeping, in terms.
+
+	Returns:
+		Callable: A summarizer taking (records, target) and returning a list of
+		replacement contents, or None to decline.
+
+	Example:
+		>>> from a2m.memory import MemoryRecord
+		>>> summarize = extractive_summarizer(keep=1)
+		>>> records = [MemoryRecord("the deploy key rotates every ninety days. it is fine.", tier="episodic"),
+		...            MemoryRecord("it is fine. it is fine.", tier="episodic")]
+		>>> summarize(records, "semantic")
+		['the deploy key rotates every ninety days.']
+	"""
+	def summarize(records: list[Any], target: str) -> list[str] | None:
+		"""Select the most informative sentences from a group of records.
+
+		Args:
+			records (list[MemoryRecord]): The records being summarized.
+			target (str): The tier the summary is heading into. Unused -- this
+				summarizer treats every destination the same.
+
+		Returns:
+			list[str] | None: One entry, the selected sentences joined, or None
+			when there is nothing worth keeping.
+		"""
+		sentences = []
+		for record in records:
+			for piece in re.split(r"(?<=[.!?])\s+|\n+", str(getattr(record, "content", "") or "")):
+				piece = piece.strip()
+				if piece and piece not in sentences:
+					sentences.append(piece)
+
+		if not sentences:
+			return None
+
+		# Document frequency across sentences, so a phrase repeated everywhere
+		# carries no information and a distinguishing one carries a lot.
+		terms_of  = [set(tokenize(sentence)) for sentence in sentences]
+		frequency : dict[str, int] = {}
+		for held in terms_of:
+			for term in held:
+				frequency[term] = frequency.get(term, 0) + 1
+
+		total  = len(sentences)
+		scored = []
+		for index, (sentence, held) in enumerate(zip(sentences, terms_of)):
+			if len(held) < min_terms:
+				continue
+			scored.append((sum(idf(frequency[term], total) for term in held), index, sentence))
+
+		if not scored:
+			return None
+
+		# Rank by information, then restore the original order so the summary
+		# still reads as prose rather than as a ranked list.
+		best = sorted(scored, key=lambda entry: -entry[0])[:max(1, keep)]
+		return [" ".join(sentence for _, _, sentence in sorted(best, key=lambda entry: entry[1]))]
+
+	return summarize
 
 
 def llm_consolidator(model: Any, tiers: set[str] = None, system: str = None, limit: int = 12) -> Callable:

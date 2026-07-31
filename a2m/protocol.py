@@ -41,7 +41,7 @@ from   typing      import Any, Callable
 
 
 from   a2m.jsonrpc import (
-	Client, Dispatcher, INVALID_PARAMS, JsonRpcError,
+	Client, Dispatcher, INTERNAL_ERROR, INVALID_PARAMS, JsonRpcError,
 	HttpTransport, LocalTransport, StdioTransport, make_error_response,
 	make_notification, serve_http, serve_stdio,
 )
@@ -80,6 +80,7 @@ A2M_CAPABILITIES = {
 	"keys"       : ["memory/fetch"],
 	"external"   : [],
 	"events"     : ["memory/events", "memory/events/subscribe", "memory/events/unsubscribe"],
+	"summarize"  : ["memory/summarize"],
 }
 
 A2M_METHODS = [method for methods in A2M_CAPABILITIES.values() for method in methods]
@@ -248,6 +249,8 @@ class MemoryServer:
 		embedding_model      : str         = None,
 		push_events          : bool        = True,
 		event_retention      : int         = 1024,
+		summarize_fn         : Callable    = None,
+		summarizer_model     : str         = None,
 	) -> None:
 		"""Wrap a store as an A2M server.
 
@@ -279,6 +282,14 @@ class MemoryServer:
 		self.embedding_model      = embedding_model
 		self.push_events          = bool(push_events)
 		self.events_log           = EventLog(retain=event_retention)
+		self.summarizer_model     = summarizer_model
+		# Deliberately separate from the stack's consolidate_fn, which decides
+		# what *spilling* means. Sharing one callable would make installing an
+		# on-demand summarizer silently rewrite records under capacity pressure
+		# too -- a change to the store's behaviour that nobody asked for. A
+		# stack that already has a consolidator lends it, which is the common
+		# case and costs nothing.
+		self.summarize_fn         = summarize_fn or getattr(self.stack, "consolidate_fn", None)
 		# A2M messages are single objects: a batch has no id to bind a response to,
 		# and nothing in the protocol needs one (spec §8).
 		self.dispatcher           = Dispatcher(allow_batch=False)
@@ -292,6 +303,14 @@ class MemoryServer:
 
 		if "core" not in self.capabilities:
 			raise ValueError("An A2M server must implement the 'core' capability")
+
+		# Spec §2: a server MUST NOT advertise a capability it does not fully
+		# implement. Summarizing needs a summarizer, and a stack without one
+		# would answer every call by declining -- which is indistinguishable
+		# from "nothing durable to say" and therefore a lie a client cannot
+		# detect. So the declaration follows the stack rather than the default.
+		if "summarize" in self.capabilities and self.summarize_fn is None:
+			self.capabilities.remove("summarize")
 
 		self.methods = [m for c in self.capabilities for m in A2M_CAPABILITIES.get(c, [])]
 
@@ -310,6 +329,7 @@ class MemoryServer:
 			"memory/events"      : self.events,
 			"memory/events/subscribe"  : self.events_subscribe,
 			"memory/events/unsubscribe": self.events_unsubscribe,
+			"memory/summarize"   : self.summarize,
 		}
 
 		# Every A2M method is registered, including those of undeclared
@@ -403,6 +423,7 @@ class MemoryServer:
 			"limits"       : {"max_records_per_call": self.max_records_per_call},
 			"embeddings"   : self._embedding_profile() if self.supports("embeddings") else None,
 			"events"       : {"push": self._push_available()} if self.supports("events") else None,
+			"summarize"    : {"model": self.summarizer_model} if self.supports("summarize") else None,
 			"scorer"       : described.get("scorer", None),
 			"total"        : described.get("total", 0),
 			"working"      : described.get("working", None),
@@ -804,6 +825,125 @@ class MemoryServer:
 			summarized = report.get("summarized", None),
 		)
 		return report
+
+
+	def summarize(
+		self,
+		ids       : list[str]      = None,
+		query     : str            = None,
+		tier      : str            = None,
+		where     : dict[str, Any] = None,
+		key_prefix: str            = None,
+		limit     : int            = 12,
+		owner     : str            = None,
+		into      : str            = None,
+		key       : str            = None,
+		**ignored : Any,
+	) -> dict[str, Any]:
+		"""Handle 'memory/summarize' -- rewrite records into durable statements.
+
+		The same operation consolidation performs when records spill, on demand.
+		The sources are read and **never deleted** (spec §4.15); a caller that
+		wants them gone issues its own forget afterwards, with the ids it has
+		just been shown.
+
+		Args:
+			ids (list[str], optional): Selector -- summarize exactly these.
+			query (str, optional): Selector -- summarize what this recalls.
+			tier (str, optional): Selector -- read from this tier only.
+			where (dict, optional): Selector -- metadata filter.
+			key_prefix (str, optional): Selector -- keys at or under this.
+			limit (int, optional): At most this many source records.
+			owner (str, optional): Scope.
+			into (str, optional): Destination tier for the summary.
+			key (str, optional): Address for the summary. An occupied key is
+				replaced, which is how a page is maintained rather than
+				duplicated.
+			**ignored: Unrecognised parameters are ignored.
+
+		Returns:
+			dict: 'records' (the summaries written), 'read' and 'written'.
+			An empty 'records' with 'written': 0 means the summarizer declined,
+			which is an answer rather than an error.
+
+		Raises:
+			JsonRpcError: -32602 when no selector is given, -32002 for an
+				unknown tier, -32003 for a field of an undeclared capability.
+		"""
+		if not any([ids, query, tier, where, key_prefix]):
+			raise JsonRpcError(
+				INVALID_PARAMS,
+				"Refusing to summarize everything: pass ids, query, tier, where or key_prefix",
+			)
+
+		if key is not None and not self.supports("keys"):
+			raise JsonRpcError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'keys' capability")
+
+		if (into is not None or tier is not None) and not self.supports("tiers"):
+			raise JsonRpcError(CAPABILITY_NOT_SUPPORTED, "This server does not implement the 'tiers' capability")
+
+		# Selection reuses the ordinary read paths, so a selector means here
+		# exactly what it means everywhere else.
+		try:
+			if ids:
+				# `get` is on every stack; `records_in_all` is only on the
+				# reference one, and reaching for it made this method work on
+				# the in-memory store and fail on both SQL stores. Ask the
+				# store for what it has, never for what one of them happens to.
+				found   = (self.stack.get(id, agent=owner) for id in ids)
+				sources = [record for record in found if record is not None]
+			elif query:
+				sources = [record for record, _ in self.stack.recall(
+					query=query, tier=tier, limit=limit, where=where,
+					agent=owner, key_prefix=key_prefix, touch=False)]
+			else:
+				sources = self.stack.timeline(tier=tier, limit=limit, agent=owner,
+				                              where=where, key_prefix=key_prefix)
+		except KeyError as exc:
+			raise JsonRpcError(UNKNOWN_TIER, str(exc))
+
+		if limit and limit > 0:
+			sources = sources[:limit]
+
+		if not sources:
+			return {"records": [], "read": 0, "written": 0}
+
+		target = into or (self.stack.of_kind("semantic") or [None])[0]
+
+		# The summarizer may decline -- llm_consolidator does exactly that when
+		# the model reports there is no durable fact in the material. Declining
+		# is an answer, and a far better one than inventing content.
+		try:
+			contents = self.summarize_fn(sources, target)
+		except Exception as exc:
+			raise JsonRpcError(INTERNAL_ERROR, f"The summarizer failed: {exc}")
+
+		if not contents:
+			return {"records": [], "read": len(sources), "written": 0}
+
+		written = []
+		for index, content in enumerate(contents):
+			stored = self.stack.remember(
+				content  = content,
+				tier     = target,
+				role     = "memory",
+				owner    = owner,
+				# One key addresses one record, so only the first summary can
+				# take it; the rest are ordinary records beside it.
+				key      = key if (key and index == 0) else None,
+				metadata = {"summarized_from": [r.id for r in sources]},
+			)
+			written.append(stored)
+
+		for stored in written:
+			self._emit("written", owner=stored.owner, id=stored.id, tier=stored.tier,
+			           key=stored.key, revision=stored.revision if stored.key else None)
+
+		return {
+			"records" : [record.to_dict() for record in written],
+			"read"    : len(sources),
+			"written" : len(written),
+		}
 
 
 	def events(self, cursor: str = None, limit: int = 256, kinds: list[str] = None,
@@ -1273,6 +1413,41 @@ class MemoryClient:
 		return self.client.call("memory/consolidate")
 
 
+	def summarize(self, ids: list[str] = None, query: str = None, tier: str = None,
+	              where: dict[str, Any] = None, key_prefix: str = None, limit: int = 12,
+	              into: str = None, key: str = None) -> dict[str, Any]:
+		"""Rewrite a set of records into durable statements, and store the result.
+
+		The sources are never deleted. Pass `key` to maintain a single record
+		that is rewritten each time rather than accumulating summaries.
+
+		Args:
+			ids (list[str], optional): Selector -- summarize exactly these.
+			query (str, optional): Selector -- summarize what this recalls.
+			tier (str, optional): Selector -- read from this tier only.
+			where (dict, optional): Selector -- metadata filter.
+			key_prefix (str, optional): Selector -- keys at or under this.
+			limit (int, optional): At most this many source records.
+			into (str, optional): Destination tier.
+			key (str, optional): Address for the summary; an occupied one is
+				replaced.
+
+		Returns:
+			dict: 'records', 'read' and 'written'. A 'written' of 0 means the
+			server declined, which is an answer rather than an error.
+
+		Example:
+			memory.summarize(query="deployment", into="semantic", key="wiki/deploys")
+		"""
+		params = {"limit": limit}
+		for name, value in (("ids", list(ids) if ids else None), ("query", query), ("tier", tier),
+		                    ("where", where), ("key_prefix", key_prefix), ("into", into), ("key", key)):
+			if value is not None:
+				params[name] = value
+
+		return self.client.call("memory/summarize", self._scoped(params))
+
+
 	def events(self, cursor: str = None, limit: int = 256, kinds: list[str] = None) -> dict[str, Any]:
 		"""Read what changed since a cursor.
 
@@ -1506,6 +1681,35 @@ def serve_a2m_stdio(server) -> None:
 	serve_stdio(server.dispatcher, drain=server.take_notifications)
 
 
+def reference_server(stack: MemoryStack = None, name: str = "agent-memory",
+                     capabilities: list[str] = None) -> MemoryServer:
+	"""The reference server, configured the way the CLI serves it.
+
+	It carries an extractive summarizer, so `summarize` is declared and
+	exercised by every conformance run rather than only where someone has a
+	language model configured. Selecting sentences rather than rewriting them
+	is a weaker summary and an entirely conformant one -- spec §4.15 does not
+	say how a summary is produced.
+
+	Args:
+		stack (MemoryStack, optional): The store to expose.
+		name (str, optional): Server name.
+		capabilities (list[str], optional): What to declare.
+
+	Returns:
+		MemoryServer: Ready to serve.
+	"""
+	from a2m.retrieval import extractive_summarizer
+
+	return MemoryServer(
+		stack            = stack,
+		name             = name,
+		capabilities     = capabilities,
+		summarize_fn     = extractive_summarizer(),
+		summarizer_model = None,
+	)
+
+
 def serve(stack: MemoryStack = None, name: str = "agent-memory", capabilities: list[str] = None) -> None:
 	"""Run this process as an A2M server on stdin/stdout.
 
@@ -1514,7 +1718,7 @@ def serve(stack: MemoryStack = None, name: str = "agent-memory", capabilities: l
 		name (str, optional): Server name.
 		capabilities (list[str], optional): What to declare.
 	"""
-	serve_a2m_stdio(MemoryServer(stack=stack, name=name, capabilities=capabilities))
+	serve_a2m_stdio(reference_server(stack=stack, name=name, capabilities=capabilities))
 
 
 def serve_over_http(stack: MemoryStack = None, name: str = "agent-memory", host: str = "127.0.0.1", port: int = 8778) -> None:
@@ -1526,6 +1730,6 @@ def serve_over_http(stack: MemoryStack = None, name: str = "agent-memory", host:
 		host (str, optional): Bind address.
 		port (int, optional): Bind port.
 	"""
-	server = serve_a2m_http(MemoryServer(stack=stack, name=name), host=host, port=port)
+	server = serve_a2m_http(reference_server(stack=stack, name=name), host=host, port=port)
 	print(f"A2M {A2M_VERSION} on http://{host}:{port}/", file=sys.stderr)
 	server.serve_forever()
