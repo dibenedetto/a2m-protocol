@@ -57,6 +57,7 @@ jobs:
           python -m examples.embedders
           python -m examples.rag_ingest
           python -m examples.procedural
+          python -m examples.llm_wiki
 
       - name: Both demo topologies
         run: |
@@ -75,25 +76,25 @@ jobs:
         target:
           - name: reference
             command: python -m a2m
-            expect: 94
+            expect: 103
           - name: minimal-python
             command: python implementations/server_minimal.py
-            expect: 36
+            expect: 37
           - name: minimal-typescript
             command: node --experimental-strip-types implementations/server_minimal.ts
-            expect: 46
+            expect: 47
           # A corpus that refuses writes (spec §2.1). It is here because the
           # read-only profile is the on-ramp for every existing RAG stack, and
           # an on-ramp nothing exercises is an on-ramp that quietly breaks.
           - name: readonly-corpus
             command: python implementations/server_readonly.py
-            expect: 31
+            expect: 32
           - name: sqlite
             command: python -m implementations.store_sqlite ci.db
-            expect: 94
+            expect: 103
           - name: federated
             command: python -m implementations.server_federated ci-memories/
-            expect: 94
+            expect: 95
     steps:
       - uses: actions/checkout@v4
 
@@ -133,7 +134,7 @@ jobs:
             sleep 1
           done
           python -m tools.conformance --http http://127.0.0.1:8778/ | tee report.txt
-          grep -q "94/94 checks passed" report.txt || { echo "::error::expected 94 checks"; exit 1; }
+          grep -q "103/103 checks passed" report.txt || { echo "::error::expected 103 checks over http"; exit 1; }
 
   # Both PostgreSQL targets. They exist to catch tier logic that leaked into a
   # storage engine: store.py holds the tier model and contains no SQL, and the
@@ -161,8 +162,13 @@ jobs:
         target:
           - name: postgres
             command: python -m implementations.store_postgres postgresql://a2m:a2m@127.0.0.1:5432/a2m
+            expect: 103
+          # The router declares no summarizer, so it honestly runs eight checks
+          # fewer. Sharing one expected count across both targets would have
+          # hidden that -- which is the whole reason the counts are asserted.
           - name: federated-on-postgres
             command: python -m implementations.server_federated postgresql://a2m:a2m@127.0.0.1:5432/a2mfed --backend postgres
+            expect: 95
     steps:
       - uses: actions/checkout@v4
 
@@ -181,7 +187,8 @@ jobs:
       - name: ${{ matrix.target.command }}
         run: |
           python -m tools.conformance --stdio ${{ matrix.target.command }} | tee report.txt
-          grep -q "94/94 checks passed" report.txt || { echo "::error::expected 94 checks"; exit 1; }
+          grep -q "${{ matrix.target.expect }}/${{ matrix.target.expect }} checks passed" report.txt \
+            || { echo "::error::expected ${{ matrix.target.expect }} checks"; exit 1; }
 
   # The package an implementer actually installs. Building it is not enough --
   # what matters is that it imports and works from a directory that is not the

@@ -53,6 +53,7 @@ examples/cross_framework.py  both frameworks, one store, 6/6
 examples/embedders.py        the scorer seam and the embed seam, offline, 11/11
 examples/rag_ingest.py       corpus ingestion: group, keys, external, 16/16
 examples/procedural.py       skills in, promotion in, nothing spilled in, 14/14
+examples/llm_wiki.py         Karpathy's LLM wiki on A2M, no extensions, 21/21
 examples/n8n_workflow.json   n8n over stock HTTP nodes, importable
 ```
 
@@ -75,23 +76,23 @@ Everything runs from the repository root.
 
 ```bash
 python -m tools.check_stdlib_only     # no dependency crept in anywhere
-python -m tools.test_a2m              # 232 checks, offline, no test runner
+python -m tools.test_a2m              # 245 checks, offline, no test runner
 python -m doctest a2m/memory.py a2m/text.py a2m/retrieval.py a2m/jsonrpc.py a2m/protocol.py  # examples are real
-python -m tools.conformance --stdio python -m a2m                            # 94/94
-python -m tools.conformance --stdio python implementations/server_minimal.py # 36/36, 9 skipped
-python -m tools.conformance --stdio python implementations/server_readonly.py # 31/31 read-only
-python -m tools.conformance --stdio python -m implementations.store_sqlite s.db      # 94/94
-python -m tools.conformance --stdio python -m implementations.server_federated r/    # 94/94
-python -m tools.conformance --stdio node --experimental-strip-types implementations/server_minimal.ts  # 46/46
-python -m tools.demo_stack && python -m tools.demo_stack --router   # 18/18 each
+python -m tools.conformance --stdio python -m a2m                            # 103/103
+python -m tools.conformance --stdio python implementations/server_minimal.py # 37/37, 10 skipped
+python -m tools.conformance --stdio python implementations/server_readonly.py # 32/32 read-only
+python -m tools.conformance --stdio python -m implementations.store_sqlite s.db      # 103/103
+python -m tools.conformance --stdio python -m implementations.server_federated r/    # 95/95 (no summarizer)
+python -m tools.conformance --stdio node --experimental-strip-types implementations/server_minimal.ts  # 47/47
+python -m tools.demo_stack && python -m tools.demo_stack --router   # 37 and 33
 
 # PostgreSQL targets, need a server with pgvector:
 docker run -d --name a2m-pg -e POSTGRES_PASSWORD=a2m -e POSTGRES_USER=a2m \
   -e POSTGRES_DB=a2m -p 55432:5432 pgvector/pgvector:pg16
 python -m tools.conformance --stdio python -m implementations.store_postgres \
-  postgresql://a2m:a2m@127.0.0.1:55432/a2m                          # 94/94
+  postgresql://a2m:a2m@127.0.0.1:55432/a2m                          # 103/103
 python -m tools.conformance --stdio python -m implementations.server_federated \
-  postgresql://a2m:a2m@127.0.0.1:55432/a2mfed --backend postgres    # 94/94
+  postgresql://a2m:a2m@127.0.0.1:55432/a2mfed --backend postgres    # 95/95
 # (the a2mfed database must exist: docker exec a2m-pg psql -U a2m -d a2m -c "CREATE DATABASE a2mfed")
 
 python implementations/client.py --stdio python implementations/server_minimal.py -- describe
@@ -100,14 +101,14 @@ python implementations/client.py --stdio python implementations/server_minimal.p
 Over stdio the full-capability targets include push delivery end to end. Over
 HTTP the suite instead checks that push is honestly refused, plus the binding
 checks stdio cannot reach — Origin, version header, 405, well-known — for
-**94/94** there too. Start a server with `--http` first, then
+**103/103** there too. Start a server with `--http` first, then
 `python -m tools.conformance --http http://127.0.0.1:8778/`.
 
-**A change is not done until all seven conformance targets still pass.** They
+**A change is not done until all eight conformance targets still pass.** They
 share no storage code — one is not even Python, two need a database — so a change
 that passes only against `python -m a2m` has probably leaked an implementation
 assumption into the protocol layer. If Postgres is not running, say so rather
-than reporting five of seven as a pass.
+than reporting six of eight as a pass.
 
 The two SQL stores **do** share code, and deliberately: `store.py` holds
 `TieredMemoryStack` and the `TierStore` base and contains no SQL at all, while
@@ -141,7 +142,11 @@ Docstring examples are executed by doctest. If you write one, it must be true.
 - **`score` is ranking only.** Never comparable across servers or calls. Do not
   compare, threshold or average scores from different sources.
 - **Undeclared capability → `-32003`, never `-32601`.** A client cannot tell
-  `METHOD_NOT_FOUND` from a typo.
+  `METHOD_NOT_FOUND` from a typo. And a capability a server cannot honour is one
+  it must drop from its own declaration — `MemoryServer` removes `summarize`
+  when it has no summarizer rather than declaring it and declining every call.
+- **`summarize` never deletes its sources.** Consolidation may; this must not
+  (spec §4.15). Declining, with `written: 0`, is an answer rather than an error.
 - **A read-only server is conformant** (spec §2.1). It answers `-32004` from
   **both** `remember` and `forget`, consistently, and the suite runs a
   read-only profile against it. Never "fix" that by making a write check

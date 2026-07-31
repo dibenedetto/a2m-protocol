@@ -114,6 +114,7 @@ checks.
 <tr><td><code>embeddings</code></td><td><em>adds</em> <code>embedding</code> — caller-owned, verbatim</td><td>no</td></tr>
 <tr><td><code>external</code></td><td><em>adds</em> <code>uri</code> — points at a file or blob</td><td>no</td></tr>
 <tr><td><code>events</code></td><td><code>events</code> <code>events/subscribe</code> <code>events/unsubscribe</code></td><td>no</td></tr>
+<tr><td><code>summarize</code></td><td><code>summarize</code> — <em>distil records into a durable statement</em></td><td>no</td></tr>
 </tbody>
 </table>
 </div>
@@ -220,7 +221,7 @@ procedure.
 </section>
 
 <section>
-<h2>Six implementations, one suite</h2>
+<h2>Seven implementations, one suite</h2>
 <p>
 The conformance suite speaks only the protocol — it never imports the server it
 tests, so an implementation in another language is checked exactly as a Python
@@ -232,12 +233,13 @@ ways no defensive coding on their side can fix.
 <table>
 <thead><tr><th></th><th>storage</th><th>declares</th><th>conformance</th></tr></thead>
 <tbody>
-<tr><td><code>python -m a2m</code></td><td>a dict in memory</td><td>everything</td><td>94/94</td></tr>
-<tr><td><code>server_minimal.py</code></td><td>a dict, stdlib only</td><td><code>core</code></td><td>36/36</td></tr>
-<tr><td><code>server_minimal.ts</code></td><td>a Map, <strong>TypeScript</strong></td><td><code>core</code> + <code>keys</code></td><td>46/46</td></tr>
-<tr><td><code>store_sqlite.py</code></td><td>SQLite + sqlite-vec</td><td>everything</td><td>94/94</td></tr>
-<tr><td><code>store_postgres.py</code></td><td><strong>PostgreSQL + pgvector</strong></td><td>everything</td><td>94/94</td></tr>
-<tr><td><code>server_federated.py</code></td><td>four A2M servers</td><td>everything</td><td>94/94</td></tr>
+<tr><td><code>python -m a2m</code></td><td>a dict in memory</td><td>everything</td><td>103/103</td></tr>
+<tr><td><code>server_minimal.py</code></td><td>a dict, stdlib only</td><td><code>core</code></td><td>37/37</td></tr>
+<tr><td><code>server_minimal.ts</code></td><td>a Map, <strong>TypeScript</strong></td><td><code>core</code> + <code>keys</code></td><td>47/47</td></tr>
+<tr><td><code>server_readonly.py</code></td><td>a fixed corpus, <strong>read-only</strong></td><td><code>core</code></td><td>32/32</td></tr>
+<tr><td><code>store_sqlite.py</code></td><td>SQLite + sqlite-vec</td><td>everything</td><td>103/103</td></tr>
+<tr><td><code>store_postgres.py</code></td><td><strong>PostgreSQL + pgvector</strong></td><td>everything</td><td>103/103</td></tr>
+<tr><td><code>server_federated.py</code></td><td>four A2M servers</td><td>everything but <code>summarize</code></td><td>95/95</td></tr>
 </tbody>
 </table>
 </div>
