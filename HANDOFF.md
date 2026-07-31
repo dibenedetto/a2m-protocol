@@ -37,11 +37,12 @@ vector store can conform, and the repository stays standard-library only.
   still free. **That stops the moment it is announced** — after which additions
   are new capabilities and breaking changes need a version bump. This is the one
   irreversible gate in the whole plan.
-- **All work is committed through `c134367`**; check `git status` for anything
-  newer that a session left uncommitted.
-- **Nine capabilities**: `core`, `tiers`, `salience`, `scopes`, `sessions`,
-  `keys`, `embeddings`, `external`, `events`. No names are reserved (spec §9.1).
-- **Seven conformance targets pass** — see §4 for the commands and counts.
+- **Work is committed on branch `launch-prep`**, not merged to `main`; check
+  `git log main..HEAD` and `git status`.
+- **Eleven capabilities**: `core`, `tiers`, `salience`, `scopes`, `sessions`,
+  `keys`, `embeddings`, `external`, `events`, `summarize`, `prompt`. No names
+  are reserved (spec §9.1).
+- **Eight conformance targets pass** — see §4 for the commands and counts.
 - **Not yet done**: PyPI publication, the website, CI, the launch. That is §6.
 
 ## 3. Environment — read this before running anything
@@ -69,36 +70,36 @@ vector store can conform, and the repository stays standard-library only.
 ## 4. How to verify anything
 
 Everything runs from the repository root. **A change is not done until all
-seven conformance targets still pass.** They share no storage code — one is not
+eight conformance targets still pass.** They share no storage code — one is not
 even Python, two need a database — so a change that passes only against
 `python -m a2m` has probably leaked an implementation assumption into the
-protocol layer. If Postgres is not running, say so rather than reporting five of
-seven as a pass.
+protocol layer. If Postgres is not running, say so rather than reporting six of
+eight as a pass.
 
 | target | expected |
 |---|---|
-| `python -m tools.test_a2m` | 232 passed, 0 failed |
-| `python -m doctest a2m/*.py` (memory, text, retrieval, jsonrpc, protocol) | silent |
-| `--stdio python -m a2m` | 94/94, 2 skipped |
-| `--stdio python implementations/server_minimal.py` | 36/36, 9 skipped |
-| `--stdio node --experimental-strip-types implementations/server_minimal.ts` | 46/46, 8 skipped |
-| `--stdio python -m implementations.store_sqlite s.db` | 94/94 |
-| `--stdio python -m implementations.store_postgres postgresql://a2m:a2m@127.0.0.1:55432/a2m` | 94/94 |
-| `--stdio python -m implementations.server_federated r/` | 94/94 |
-| `--stdio python -m implementations.server_federated postgresql://a2m:a2m@127.0.0.1:55432/a2mfed --backend postgres` | 94/94 |
-| `--http http://127.0.0.1:8778/` (start a server with `--http` first) | 94/94 |
-| `python -m tools.demo_stack` and `--router` | 18/18 each |
+| `python -m tools.test_a2m` | 263 passed, 0 failed |
+| `python -m doctest a2m/*.py` (memory, text, retrieval, jsonrpc, protocol, prompt) | silent |
+| `--stdio python -m a2m` | 120/120, 2 skipped |
+| `--stdio python implementations/server_minimal.py` | 37/37, 11 skipped |
+| `--stdio node --experimental-strip-types implementations/server_minimal.ts` | 47/47, 10 skipped |
+| `--stdio python -m implementations.store_sqlite s.db` | 120/120 |
+| `--stdio python -m implementations.store_postgres postgresql://a2m:a2m@127.0.0.1:55432/a2m` | 120/120 |
+| `--stdio python -m implementations.server_federated r/` | 95/95 (declares no summarizer) |
+| `--stdio python -m implementations.server_federated postgresql://a2m:a2m@127.0.0.1:55432/a2mfed --backend postgres` | 95/95 |
+| `--http http://127.0.0.1:8778/` (start a server with `--http` first) | 120/120 |
+| `python -m tools.demo_stack` and `--router` | 37 and 33 |
 | `python -m examples.cross_framework` | 6/6 |
+| `--stdio python implementations/server_readonly.py` | 32/32, read-only profile |
 | `python -m examples.embedders` | 11/11, offline |
 | `python -m examples.rag_ingest` | 16/16 |
 | `python -m examples.procedural` | 14/14 |
+| `python -m examples.llm_wiki` | 21/21 |
+| `python -m tools.test_interop` (needs 4 frameworks, py3.12) | 35/35, 5x5 grid |
+| `python -m tools.check_n8n` (needs a server on 8778) | 3/3 |
 
-Known rough edge, not yet fixed: `SqliteMemoryStack` holds its connection for
-the life of the process and exposes no `close()`, while `PgMemoryStack` does.
-On Windows the open handle blocks removing a temp directory, which is why
-`examples/embedders.py` and `examples/procedural.py` pass
-`ignore_cleanup_errors=True`. Adding `close()` to the SQLite store for parity is
-Marco's call.
+Both SQL stores inherit `close()` from `TieredMemoryStack`; anything opening
+one must call it, or on Windows the open handle blocks deleting the file.
 
 Conformance is `python -m tools.conformance <target>`. Over stdio the
 full-capability targets exercise push delivery end to end; over HTTP the suite

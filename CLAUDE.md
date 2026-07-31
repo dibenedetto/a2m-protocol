@@ -79,12 +79,12 @@ Everything runs from the repository root.
 
 ```bash
 python -m tools.check_stdlib_only     # no dependency crept in anywhere
-python -m tools.test_a2m              # 245 checks, offline, no test runner
+python -m tools.test_a2m              # 263 checks, offline, no test runner
 python -m doctest a2m/memory.py a2m/text.py a2m/retrieval.py a2m/jsonrpc.py a2m/protocol.py  # examples are real
-python -m tools.conformance --stdio python -m a2m                            # 114/114
+python -m tools.conformance --stdio python -m a2m                            # 120/120
 python -m tools.conformance --stdio python implementations/server_minimal.py # 37/37, 11 skipped
 python -m tools.conformance --stdio python implementations/server_readonly.py # 32/32 read-only
-python -m tools.conformance --stdio python -m implementations.store_sqlite s.db      # 114/114
+python -m tools.conformance --stdio python -m implementations.store_sqlite s.db      # 120/120
 python -m tools.conformance --stdio python -m implementations.server_federated r/    # 95/95 (no summarizer)
 python -m tools.conformance --stdio node --experimental-strip-types implementations/server_minimal.ts  # 47/47
 python -m tools.demo_stack && python -m tools.demo_stack --router   # 37 and 33
@@ -93,7 +93,7 @@ python -m tools.demo_stack && python -m tools.demo_stack --router   # 37 and 33
 docker run -d --name a2m-pg -e POSTGRES_PASSWORD=a2m -e POSTGRES_USER=a2m \
   -e POSTGRES_DB=a2m -p 55432:5432 pgvector/pgvector:pg16
 python -m tools.conformance --stdio python -m implementations.store_postgres \
-  postgresql://a2m:a2m@127.0.0.1:55432/a2m                          # 114/114
+  postgresql://a2m:a2m@127.0.0.1:55432/a2m                          # 120/120
 python -m tools.conformance --stdio python -m implementations.server_federated \
   postgresql://a2m:a2m@127.0.0.1:55432/a2mfed --backend postgres    # 95/95
 # (the a2mfed database must exist: docker exec a2m-pg psql -U a2m -d a2m -c "CREATE DATABASE a2mfed")
@@ -104,7 +104,7 @@ python implementations/client.py --stdio python implementations/server_minimal.p
 Over stdio the full-capability targets include push delivery end to end. Over
 HTTP the suite instead checks that push is honestly refused, plus the binding
 checks stdio cannot reach — Origin, version header, 405, well-known — for
-**114/114** there too. Start a server with `--http` first, then
+**120/120** there too. Start a server with `--http` first, then
 `python -m tools.conformance --http http://127.0.0.1:8778/`.
 
 **A change is not done until all eight conformance targets still pass.** They
@@ -148,6 +148,13 @@ Docstring examples are executed by doctest. If you write one, it must be true.
   `METHOD_NOT_FOUND` from a typo. And a capability a server cannot honour is one
   it must drop from its own declaration — `MemoryServer` removes `summarize`
   when it has no summarizer rather than declaring it and declining every call.
+- **Rendering a prompt never costs money by default.** `prompt`'s default
+  method is `template` — deterministic, no model. A server offers `model` only
+  when an operator configured a renderer, `describe` says which methods exist,
+  and an unavailable one is refused with `-32602` rather than silently
+  substituted. A caller must never discover an inference call from a bill.
+- **`summarize` writes; `prompt` does not.** Both may use a model. Summarizing
+  changes the store; rendering returns text and forgets it.
 - **`summarize` never deletes its sources.** Consolidation may; this must not
   (spec §4.15). Declining, with `written: 0`, is an answer rather than an error.
 - **A read-only server is conformant** (spec §2.1). It answers `-32004` from

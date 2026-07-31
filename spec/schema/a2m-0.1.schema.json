@@ -29,7 +29,7 @@
       ]
     },
     "promptOption": {
-      "description": "true for the server's defaults, or an object configuring the rendering.",
+      "description": "true for the server's defaults, or an object configuring the rendering. method says what it costs; style says what it looks like.",
       "oneOf": [
         {
           "type": "boolean"
@@ -37,13 +37,27 @@
         {
           "type": "object",
           "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "template",
+                "model",
+                "none"
+              ],
+              "description": "template is deterministic and the default; model costs an inference call; none renders nothing."
+            },
             "style": {
               "type": "string",
               "enum": [
                 "auto",
                 "facts",
                 "transcript"
-              ]
+              ],
+              "description": "Advisory when method is model."
+            },
+            "model": {
+              "type": "string",
+              "description": "Which model, when method is model."
             },
             "budget": {
               "type": "integer",
@@ -650,7 +664,8 @@
           "type": "object",
           "description": "Present when the prompt capability is declared.",
           "required": [
-            "styles"
+            "styles",
+            "methods"
           ],
           "properties": {
             "styles": {
@@ -658,6 +673,20 @@
               "items": {
                 "type": "string"
               }
+            },
+            "methods": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Always contains 'template'. Contains 'model' only when the server can actually run one."
+            },
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "What method 'model' would use."
             }
           }
         },

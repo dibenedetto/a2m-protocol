@@ -779,6 +779,86 @@ def test_summarize() -> None:
 	memory.close()
 
 
+def test_prompt() -> None:
+	print("== prompt ==")
+
+	from a2m           import MemoryClient
+	from a2m.jsonrpc   import Client, LocalTransport
+	from a2m.prompt    import render
+
+	# The renderer on its own: form follows the tier kind.
+	block, used = render([{"id": "a", "content": "the deploy key rotates every ninety days"}])
+	check("facts render as a list", block.startswith("Relevant memory:\n- "), block)
+	check("and report which ids they contain", used == ["a"], used)
+
+	block, _ = render([{"id": "a", "role": "user", "content": "where is the runbook?"}])
+	check("a conversation renders as a transcript", "user: where is the runbook?" in block, block)
+
+	block, used = render([{"id": "a", "content": "x" * 60}, {"id": "b", "content": "y" * 60}], budget=80)
+	check("a budget drops whole records", used == ["a"], used)
+	check("and never truncates one", "x" * 60 in block and "y" * 60 not in block, block)
+
+	block, _ = render([{"id": "a", "content": "a fact", "uri": "file:///r.md"}], cite=True)
+	check("citing marks the source", "(file:///r.md)" in block, block)
+
+	# Over the protocol.
+	server = MemoryServer(stack=MemoryStack())
+	memory = MemoryClient(Client(LocalTransport(server.dispatcher)))
+	contract = memory.describe()["prompt"]
+
+	check("describe reports styles and methods",
+	      "auto" in contract["styles"] and "template" in contract["methods"], contract)
+	check("a server with no renderer does not offer 'model'",
+	      "model" not in contract["methods"], contract)
+
+	ids = memory.remember("the deploy key rotates every ninety days", tier="semantic")
+
+	plain    = memory.client.call("memory/recall", {"query": "deploy key"})
+	rendered = memory.client.call("memory/recall", {"query": "deploy key", "prompt": True})
+	check("no prompt unless asked", "prompt" not in plain, list(plain))
+	check("records are unchanged by asking",
+	      [r["id"] for r in plain["records"]] == [r["id"] for r in rendered["records"]], rendered)
+	check("the prompt carries the ids it used", rendered["prompt_ids"] == ids, rendered)
+
+	quiet = memory.client.call("memory/recall", {"query": "deploy key", "prompt": {"method": "none"}})
+	check("method 'none' renders nothing", "prompt" not in quiet, list(quiet))
+
+	# Spec §4.16: refusing beats substituting, and the default never costs money.
+	try:
+		memory.client.call("memory/recall", {"query": "x", "prompt": {"method": "model"}})
+		check("an unavailable method is refused", False)
+	except JsonRpcError as exc:
+		check("an unavailable method is refused", exc.code == -32602, exc.code)
+
+	# With a renderer configured, 'model' appears and is used.
+	written = MemoryServer(
+		stack        = MemoryStack(),
+		prompt_fn    = lambda records, style, budget, cite: "In short: " + records[0]["content"],
+		prompt_model = "demo-llm",
+	)
+	prose = MemoryClient(Client(LocalTransport(written.dispatcher)))
+	check("a configured renderer is advertised",
+	      "model" in prose.describe()["prompt"]["methods"], prose.describe()["prompt"])
+	check("and names its model", prose.describe()["prompt"]["model"] == "demo-llm")
+
+	prose.remember("the deploy key rotates every ninety days", tier="semantic")
+	prose.recall(query="deploy key", prompt={"method": "model"})
+	check("method 'model' uses the renderer", prose.last_prompt.startswith("In short:"), prose.last_prompt)
+
+	prose.recall(query="deploy key", prompt=True)
+	check("but the default is still the deterministic one",
+	      prose.last_prompt.startswith("Relevant memory:"), prose.last_prompt)
+
+	try:
+		prose.client.call("memory/recall", {"query": "x", "prompt": {"method": "model", "model": "other"}})
+		check("asking for a different model is refused", False)
+	except JsonRpcError as exc:
+		check("asking for a different model is refused", exc.code == -32602, exc.code)
+
+	memory.close()
+	prose.close()
+
+
 def test_events() -> None:
 	print("== events ==")
 
@@ -1059,6 +1139,7 @@ def main() -> int:
 	test_caller_embeddings()
 	test_external()
 	test_summarize()
+	test_prompt()
 	test_events()
 	test_a2m_local()
 	test_a2m_spec()

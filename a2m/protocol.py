@@ -254,6 +254,8 @@ class MemoryServer:
 		event_retention      : int         = 1024,
 		summarize_fn         : Callable    = None,
 		summarizer_model     : str         = None,
+		prompt_fn            : Callable    = None,
+		prompt_model         : str         = None,
 	) -> None:
 		"""Wrap a store as an A2M server.
 
@@ -293,6 +295,11 @@ class MemoryServer:
 		# stack that already has a consolidator lends it, which is the common
 		# case and costs nothing.
 		self.summarize_fn         = summarize_fn or getattr(self.stack, "consolidate_fn", None)
+		# Only set when the operator supplied a model-backed renderer. Absent it,
+		# `methods` never advertises 'model' and a caller asking for one is
+		# refused rather than quietly handed a template (spec §4.16).
+		self.prompt_fn            = prompt_fn
+		self.prompt_model         = prompt_model
 		# A2M messages are single objects: a batch has no id to bind a response to,
 		# and nothing in the protocol needs one (spec §8).
 		self.dispatcher           = Dispatcher(allow_batch=False)
@@ -427,7 +434,7 @@ class MemoryServer:
 			"embeddings"   : self._embedding_profile() if self.supports("embeddings") else None,
 			"events"       : {"push": self._push_available()} if self.supports("events") else None,
 			"summarize"    : {"model": self.summarizer_model} if self.supports("summarize") else None,
-			"prompt"       : {"styles": ["auto", "facts", "transcript"]} if self.supports("prompt") else None,
+			"prompt"       : self._prompt_profile() if self.supports("prompt") else None,
 			"scorer"       : described.get("scorer", None),
 			"total"        : described.get("total", 0),
 			"working"      : described.get("working", None),
@@ -762,6 +769,30 @@ class MemoryServer:
 		return {"record": record.to_dict(embedding=embeddings) if record else None}
 
 
+	def _prompt_profile(self) -> dict[str, Any]:
+		"""What rendering this server offers, and what it costs (spec §4.16).
+
+		`methods` is the honest part. Every server can assemble text from the
+		records it already has, so `template` is always there; `model` appears
+		only when an operator supplied a renderer that can actually run one. A
+		client reads this to know whether asking for a prompt will cost an
+		inference call, which is not something it should have to discover from
+		a bill.
+
+		Returns:
+			dict: 'styles', 'methods', and 'model' when there is one.
+		"""
+		methods = ["template", "none"]
+		if self.prompt_fn is not None:
+			methods.insert(1, "model")
+
+		return {
+			"styles"  : ["auto", "facts", "transcript"],
+			"methods" : methods,
+			"model"   : self.prompt_model,
+		}
+
+
 	def _rendered(self, result: dict[str, Any], prompt: Any) -> dict[str, Any]:
 		"""Attach rendered prompt text to a result, when the caller asked (spec §4.16).
 
@@ -787,13 +818,48 @@ class MemoryServer:
 			return result
 
 		options = prompt if isinstance(prompt, dict) else {}
-		text, used = render(
-			result.get("records") or [],
-			budget  = int(options.get("budget") or 0),
-			cite    = bool(options.get("cite", False)),
-			style   = str(options.get("style") or "auto"),
-			kinds   = {tier["name"]: tier.get("kind") for tier in self.stack.describe().get("tiers", [])},
-		)
+		method  = str(options.get("method") or "template")
+		records = result.get("records") or []
+
+		if method == "none":
+			return result
+
+		# Refusing beats substituting. A caller that asked for a written summary
+		# and silently received a bullet list has been handed materially
+		# different text than it requested, and describe said in advance which
+		# methods exist (spec §4.16).
+		available = self._prompt_profile()["methods"]
+		if method not in available:
+			raise JsonRpcError(
+				INVALID_PARAMS,
+				f"This server renders with {available}, not '{method}'",
+				{"methods": available, "model": self.prompt_model},
+			)
+
+		wanted = options.get("model", None)
+		if wanted is not None and self.prompt_model is not None and wanted != self.prompt_model:
+			raise JsonRpcError(
+				INVALID_PARAMS,
+				f"This server renders with '{self.prompt_model}', not '{wanted}'",
+				{"model": self.prompt_model},
+			)
+
+		budget = int(options.get("budget") or 0)
+		cite   = bool(options.get("cite", False))
+		style  = str(options.get("style") or "auto")
+		kinds  = {tier["name"]: tier.get("kind") for tier in self.stack.describe().get("tiers", [])}
+
+		if method == "model":
+			# The renderer is handed the records and the options and returns
+			# prose. It may ignore `style`, which is advisory here: a model
+			# writes what it writes.
+			try:
+				text = self.prompt_fn(records, style=style, budget=budget, cite=cite)
+			except Exception as exc:
+				raise JsonRpcError(INTERNAL_ERROR, f"The prompt renderer failed: {exc}")
+			used = [record.get("id") for record in records if record.get("id")]
+		else:
+			text, used = render(records, budget=budget, cite=cite, style=style, kinds=kinds)
 
 		return dict(result, prompt=text, prompt_ids=used)
 

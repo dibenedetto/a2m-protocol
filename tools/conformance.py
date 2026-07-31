@@ -850,6 +850,13 @@ def test_prompt(client: Client, report: Report, profile: dict[str, Any]) -> None
 	report.check("and 'auto' is among the styles",
 	             isinstance(contract, dict) and "auto" in (contract.get("styles") or []), contract)
 
+	# The cost contract. A client has to be able to tell, before calling,
+	# whether rendering will spend an inference call.
+	methods = (contract or {}).get("methods") or []
+	report.check("describe reports which methods exist", isinstance(methods, list) and bool(methods), contract)
+	report.check("every server can render without a model",
+	             "template" in methods, methods)
+
 	marker = uuid.uuid4().hex
 	tiers  = [t.get("name") for t in profile.get("tiers", []) if t.get("name")]
 	target = next((t.get("name") for t in profile.get("tiers", [])
@@ -896,6 +903,36 @@ def test_prompt(client: Client, report: Report, profile: dict[str, Any]) -> None
 			report.check("a surviving record is rendered whole",
 			             str(record.get("content", "")) in tight.get("prompt", ""), id)
 			break
+
+	# The default must not cost anything. A server whose default rendering
+	# called a model would spend the caller's money on a convenience field.
+	templated = client.call("memory/recall", {"query": f"prompt probe {marker}", "limit": 5,
+	                                          "prompt": {"method": "template"}})
+	report.check("the default rendering is the deterministic one",
+	             templated.get("prompt") == rendered.get("prompt"),
+	             (rendered.get("prompt"), templated.get("prompt")))
+
+	# 'none' is the explicit way to ask for nothing, for callers whose request
+	# body is templated and cannot drop a field.
+	silent = client.call("memory/recall", {"query": f"prompt probe {marker}", "limit": 5,
+	                                       "prompt": {"method": "none"}})
+	report.check("method 'none' renders nothing at all",
+	             "prompt" not in silent and bool(silent.get("records")), list(silent))
+
+	# An unavailable method is refused, never silently substituted.
+	if "model" not in methods:
+		expect_error(report, "an unavailable method is refused, not substituted", INVALID_PARAMS,
+		             lambda: client.call("memory/recall", {"query": "x", "prompt": {"method": "model"}}))
+	else:
+		written = client.call("memory/recall", {"query": f"prompt probe {marker}", "limit": 5,
+		                                        "prompt": {"method": "model"}})
+		report.check("a model-rendered prompt comes back",
+		             isinstance(written.get("prompt"), str) and bool(written["prompt"]), written.get("prompt"))
+		report.check("and the records are still returned in full",
+		             len(written.get("records", [])) == len(rendered.get("records", [])), written)
+
+	expect_error(report, "an unknown method is refused", INVALID_PARAMS,
+	             lambda: client.call("memory/recall", {"query": "x", "prompt": {"method": "no-such-method"}}))
 
 	# timeline renders too, and a transcript is not a bullet list.
 	replayed = client.call("memory/timeline", {"limit": 5, "prompt": {"style": "transcript"}})

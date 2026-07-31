@@ -50,7 +50,7 @@ jobs:
         run: python -m tools.test_a2m
 
       - name: Docstring examples are true
-        run: python -m doctest a2m/memory.py a2m/text.py a2m/retrieval.py a2m/jsonrpc.py a2m/protocol.py
+        run: python -m doctest a2m/memory.py a2m/text.py a2m/retrieval.py a2m/jsonrpc.py a2m/protocol.py a2m/prompt.py
 
       - name: Examples
         run: |
@@ -76,7 +76,7 @@ jobs:
         target:
           - name: reference
             command: python -m a2m
-            expect: 103
+            expect: 120
           - name: minimal-python
             command: python implementations/server_minimal.py
             expect: 37
@@ -91,7 +91,7 @@ jobs:
             expect: 32
           - name: sqlite
             command: python -m implementations.store_sqlite ci.db
-            expect: 103
+            expect: 120
           - name: federated
             command: python -m implementations.server_federated ci-memories/
             expect: 95
@@ -134,7 +134,7 @@ jobs:
             sleep 1
           done
           python -m tools.conformance --http http://127.0.0.1:8778/ | tee report.txt
-          grep -q "103/103 checks passed" report.txt || { echo "::error::expected 103 checks over http"; exit 1; }
+          grep -q "120/120 checks passed" report.txt || { echo "::error::expected 120 checks over http"; exit 1; }
 
   # Both PostgreSQL targets. They exist to catch tier logic that leaked into a
   # storage engine: store.py holds the tier model and contains no SQL, and the
@@ -162,7 +162,7 @@ jobs:
         target:
           - name: postgres
             command: python -m implementations.store_postgres postgresql://a2m:a2m@127.0.0.1:5432/a2m
-            expect: 103
+            expect: 120
           # The router declares no summarizer, so it honestly runs eight checks
           # fewer. Sharing one expected count across both targets would have
           # hidden that -- which is the whole reason the counts are asserted.
