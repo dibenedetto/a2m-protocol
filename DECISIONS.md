@@ -867,3 +867,54 @@ it is a separate CI job on 3.12, and the fast stdlib jobs never wait for it.
 Adapters whose framework is missing are skipped **by name**, and CI checks the
 covered list rather than the exit code: a matrix that silently shrinks reports
 success for coverage it no longer has, which is worse than one that fails.
+
+---
+
+## 029 — Every normative claim names what would catch it lying
+
+**Decision.** [tools/check_claims.py](tools/check_claims.py) extracts every
+sentence in the specification carrying an RFC 2119 keyword and fails unless each
+one is dispositioned in [tools/claims.json](tools/claims.json) — as a named
+conformance check, a named offline check, a client obligation, prose, or
+`unverifiable` with a stated reason. It runs in CI.
+
+**Why.** The same failure appeared four times while this repository was being
+written, and every time it was found by accident:
+
+- `events` was deferred in 020 because its wire shape had no implementation.
+- §2.1 had to be written because a read-only server — the on-ramp the README
+  advertises — **crashed** the conformance suite, and nobody had run one.
+- The interop claim in the README's first sentence was tested by nothing, and
+  the matrix that finally tested it found a broken adapter on its first run
+  (028).
+- `metric` was a field a server could not get wrong, because nothing compared
+  what it declared against how it ranked. Checking it found the reference
+  server declaring cosine while ranking by recency.
+
+Four instances is a pattern, not a run of bad luck. Each was a **MUST in the
+document that nothing exercised**, and in each case the document was wrong for
+months while every test passed. A protocol whose credibility rests on an
+executable conformance suite cannot also carry requirements that suite ignores.
+
+**What the audit found immediately.** Ten requirements with no check: unique
+server-assigned ids, documented limits actually being enforced, a record with
+no content being refused, `limit: 0` meaning no limit rather than no records,
+promoting an unknown id being a no-op, closing an unknown session being a
+no-op, unsubscribing when not subscribed being a no-op, and a server without
+`prompt` ignoring the parameter rather than refusing it. All eight were
+checkable and are now checked; the other two moved to the offline suite.
+
+**Why the register is keyed by a hash of the sentence.** Rewording a
+requirement invalidates its disposition, which forces someone to re-confirm the
+check still covers what the sentence now says. That is deliberate friction: a
+MUST whose meaning drifted while its test stayed the same is precisely the
+failure this exists to catch, and it is invisible to any coarser key.
+
+**What `unverifiable` is for, and what it is not.** Eleven statements genuinely
+cannot be observed from outside — a server that *can* store JSON metadata is
+indistinguishable from one that would fail correctly if it could not; §6's
+scoping rules need an authenticated transport the suite does not provide; a
+partial batch write cannot be induced. Each carries its reason. The category
+exists so that "we cannot check this" is a written, reviewable claim rather
+than a silence, and reviewing those eleven reasons is now part of reading the
+specification.

@@ -37,6 +37,7 @@ PROTOCOL = "a2m/0.1"
 UNKNOWN_TIER             = -32002
 CAPABILITY_NOT_SUPPORTED = -32003
 READ_ONLY                = -32004
+QUOTA_EXCEEDED           = -32006
 PROTOCOL_NOT_SUPPORTED   = -32007
 INVALID_REQUEST          = -32600
 INVALID_PARAMS           = -32602
@@ -218,6 +219,41 @@ def test_core(client: Client, report: Report, profile: dict[str, Any]) -> None:
 		             len(newest) == 1 and newest[0].get("id") == ordered[-1].get("id"),
 		             newest)
 
+	# spec §3.2 -- an id the server assigns must be unique within the store.
+	pair = client.call("memory/remember", {"records": [
+		{"content": f"uniqueness probe one {marker}"},
+		{"content": f"uniqueness probe two {marker}"},
+	]}).get("ids", [])
+	report.check("server-assigned ids are unique", len(set(pair)) == len(pair) == 2, pair)
+	client.call("memory/forget", {"ids": pair})
+
+	# spec §4.2 -- every record needs content.
+	expect_error(report, "a record with no content is refused", INVALID_PARAMS,
+	             lambda: client.call("memory/remember", {"records": [{"role": "user"}]}))
+
+	# spec §4.1 -- a server enforces its own documented limits regardless of
+	# whether the client respected them.
+	batch = (profile.get("limits") or {}).get("max_records_per_call")
+	if isinstance(batch, int) and 0 < batch <= 1000:
+		try:
+			client.call("memory/remember", {"records": [
+				{"content": f"quota probe {n} {marker}"} for n in range(batch + 1)]})
+			report.check("a documented limit is enforced", False,
+			             f"accepted {batch + 1} records against a stated limit of {batch}")
+		except JsonRpcError as exc:
+			report.check("a documented limit is enforced",
+			             exc.code in (QUOTA_EXCEEDED, INVALID_PARAMS), exc.code)
+	else:
+		report.skip("a documented limit is enforced", "no max_records_per_call declared")
+
+	# spec §4.3 -- limit 0 means no limit, not no records, unless the server
+	# capped it. The opposite reading silently returns nothing.
+	if not (profile.get("limits") or {}).get("max_recall_limit"):
+		unbounded = client.call("memory/recall", {"limit": 0}).get("records", [])
+		report.check("a limit of 0 is not a limit of nothing", len(unbounded) > 0, len(unbounded))
+	else:
+		report.skip("a limit of 0 is not a limit of nothing", "the server declares a max_recall_limit")
+
 	# spec §3.2 -- a client-supplied id makes the write idempotent.
 	chosen = f"conformance-{marker}"
 	first  = client.call("memory/remember", {"records": [{"id": chosen, "content": "idempotency probe"}]})
@@ -357,6 +393,15 @@ def test_tiers(client: Client, report: Report, profile: dict[str, Any]) -> None:
 	expect_error(report, "an unknown tier is -32002", UNKNOWN_TIER,
 	             lambda: client.call("memory/promote", {"ids": ids, "tier": "no-such-tier-xyz"}))
 
+	# spec §4.6 -- an id that does not exist is simply not counted. Failing
+	# instead would make a retry after a partial move impossible.
+	try:
+		ignored = client.call("memory/promote", {"ids": [f"absent-{marker}"], "tier": target})
+		report.check("promoting an unknown id is not an error",
+		             ignored.get("promoted") == 0, ignored)
+	except JsonRpcError as exc:
+		report.check("promoting an unknown id is not an error", False, exc.code)
+
 	result = client.call("memory/consolidate", {})
 	report.check("consolidate reports counts", isinstance(result.get("counts"), dict), result)
 
@@ -469,6 +514,14 @@ def test_sessions(client: Client, report: Report, profile: dict[str, Any]) -> No
 		report.check("closing with no session is refused", False)
 	except JsonRpcError as exc:
 		report.check("closing with no session is refused", exc.code == INVALID_PARAMS, exc.code)
+
+	# spec §4.11 -- closing a conversation that was never opened is a no-op, so
+	# a client need not track which sessions it has already finished.
+	try:
+		client.call("memory/session/close", {"session": f"never-existed-{uuid.uuid4().hex}"})
+		report.check("closing an unknown session is a no-op", True)
+	except JsonRpcError as exc:
+		report.check("closing an unknown session is a no-op", False, exc.code)
 
 
 def test_keys(client: Client, report: Report, profile: dict[str, Any]) -> None:
@@ -817,6 +870,14 @@ def test_events(client: Client, report: Report, profile: dict[str, Any]) -> None
 		closed = client.call("memory/events/unsubscribe", {})
 		report.check("unsubscribe reports its state", closed.get("subscribed") is False, closed)
 
+		# spec §4.14 -- and again, with nothing to unsubscribe from.
+		try:
+			again = client.call("memory/events/unsubscribe", {})
+			report.check("unsubscribing when not subscribed is a no-op",
+			             again.get("subscribed") is False, again)
+		except JsonRpcError as exc:
+			report.check("unsubscribing when not subscribed is a no-op", False, exc.code)
+
 		client.call("memory/remember", {"records": [{"content": f"silent probe {marker}"}]})
 		client.call("memory/describe", {})
 		quiet = [m for m in client.take_notifications()
@@ -1058,6 +1119,20 @@ def test_undeclared(client: Client, report: Report, profile: dict[str, Any]) -> 
 		ran = True
 		expect_error(report, f"{method} without '{capability}' is -32003", CAPABILITY_NOT_SUPPORTED,
 		             lambda m=method, p=params: client.call(m, p))
+
+	# spec §4.16 -- `prompt` is additive, so a server that does not declare it
+	# ignores the parameter and returns the records alone. This is the opposite
+	# of `tier` on a write, where dropping the field silently would lose the
+	# caller's meaning.
+	if "prompt" not in declared:
+		ran = True
+		try:
+			plain = client.call("memory/recall", {"query": "anything", "limit": 1, "prompt": True})
+			report.check("a server without 'prompt' ignores the parameter",
+			             "prompt" not in plain and isinstance(plain.get("records"), list), list(plain))
+		except JsonRpcError as exc:
+			report.check("a server without 'prompt' ignores the parameter", False,
+			             f"refused with {exc.code} instead of ignoring")
 
 	if not ran:
 		report.skip("undeclared capability probes", "this server declares everything")

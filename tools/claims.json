@@ -1,0 +1,152 @@
+{
+  "_": "How every normative statement in spec/a2m-0.1.md is exercised. See tools/check_claims.py. Format: key -> [disposition, note]. 'suite' and 'tests' name a check whose existence is verified; 'gap' fails the tool.",
+
+  "9c3830b6": ["prose", "RFC 2119 boilerplate"],
+
+  "3bd32b9d": ["suite", "declared capabilities are known"],
+  "2c8a7be4": ["suite", "without '"],
+  "ad907fc4": ["suite", "without '"],
+  "c5dad400": ["client", "implementations/client.py calls describe in its constructor and guards every capability"],
+  "133800c3": ["client", "records are carried as dicts and handed back whole"],
+  "b3362d9a": ["suite", "unknown params are ignored, not rejected"],
+
+  "9ed3e2ca": ["suite", "a read-only server refuses forget with -32004"],
+  "8b9fc403": ["client", "A2MError carries the code; the client does not retry it"],
+  "b7e87f9e": ["suite", "and refuses a selector-less forget too"],
+
+  "73f74e10": ["suite", "metadata round-trips unchanged"],
+  "347fc270": ["suite", "metadata round-trips unchanged"],
+  "c92d5e43": ["unverifiable", "only observable on a server that cannot store JSON metadata; one that can is indistinguishable from outside"],
+
+  "efeba7f7": ["client", "ids are treated as opaque strings throughout"],
+  "c6c31cd2": ["suite", "re-writing the same id is idempotent"],
+  "a350da3f": ["suite", "server-assigned ids are unique"],
+
+  "9337b873": ["tests", "groups are never split across tiers"],
+  "ae7ff0c5": ["client", "an ingester's choice; examples/rag_ingest.py demonstrates it"],
+  "ee1deac2": ["tests", "groups are never split across tiers"],
+
+  "516943d2": ["suite", "records carry their session"],
+  "088fd279": ["suite", "and excludes everything else"],
+
+  "88dd4200": ["suite", "writing to an occupied key replaces it"],
+
+  "6d55f9fe": ["suite", "it was stored verbatim, not regenerated"],
+  "260c1a09": ["suite", "it was stored verbatim, not regenerated"],
+  "81772832": ["suite", "describe reports an embedding contract"],
+  "ba5ed023": ["suite", "the metric menu is a list of known metrics"],
+  "a58a409b": ["unverifiable", "needs a federation whose backends genuinely differ; the router intersects them but no fixture produces the disagreement"],
+  "04bb37e8": ["client", "a caller obligation; the server cannot detect the mismatch, which is why it is disclosed"],
+  "7df0956c": ["suite", "a mismatched vector width is refused"],
+
+  "50e2ea0c": ["suite", "the server did not dereference the uri"],
+
+  "e605723c": ["suite", "describe reports a protocol"],
+
+  "4ff3ba10": ["client", "the constructor negotiates before anything else can be called"],
+  "98e14553": ["suite", "describe reports a protocol"],
+  "d5eb632d": ["suite", "a documented limit is enforced"],
+  "d2c0a65d": ["suite", "an incompatible protocol is rejected"],
+
+  "93ace36d": ["suite", "a record with no content is refused"],
+  "a8cf9f36": ["tests", "writing to a tier without 'tiers' is refused"],
+  "4094862d": ["unverifiable", "a partial failure cannot be induced from outside"],
+  "2fc64eb3": ["suite", "remember returns one id per record"],
+
+  "2e7bab06": ["suite", "an absent query is not an error"],
+  "22b6d6eb": ["suite", "a limit of 0 is not a limit of nothing"],
+  "eb277cc8": ["client", "advice to callers, not a server behaviour"],
+
+  "f6ac7e0e": ["suite", "timeline can be filtered to one session"],
+  "a4b4a6c7": ["suite", "timeline ascends by created_at"],
+  "3d085332": ["suite", "timeline limit takes the newest"],
+  "a1582106": ["unverifiable", "implementing one in terms of the other is not observable; the ordering checks are the proxy"],
+
+  "0adfc3e2": ["suite", "forget with no selector is refused"],
+  "4b005143": ["suite", "forget with no selector is refused"],
+
+  "e851243d": ["suite", "an unknown tier is -32002"],
+  "f5528234": ["suite", "promoting an unknown id is not an error"],
+
+  "d961db60": ["client", "advice to callers"],
+  "21f0030a": ["suite", "tier kinds are from the vocabulary"],
+
+  "9d3457ec": ["suite", "fetch without a key is refused"],
+
+  "102a68ee": ["suite", "closing with no session is refused"],
+  "0df7827e": ["tests", "closing flushes the working tier"],
+  "4a6da846": ["suite", "closing does not destroy the conversation"],
+  "f12684f3": ["suite", "closing an unknown session is a no-op"],
+
+  "d215f74a": ["client", "the cursor is stored and handed back, never parsed"],
+  "5339cd2d": ["suite", "events carry an RFC 3339 timestamp"],
+  "766d1c47": ["suite", "successive polls see every event exactly once, in order"],
+  "4592c577": ["suite", "an unrecognised cursor is answered with reset, not silence"],
+  "f49c6907": ["client", "a caller obligation on seeing reset"],
+  "6178fd38": ["tests", "a scoped read never sees another owner's events"],
+
+  "810079dc": ["suite", "describe reports an events contract"],
+  "7142ac81": ["suite", "subscribe without push is -32003"],
+  "aec6b1be": ["suite", "an unsubscribed client is pushed nothing"],
+
+  "cbba8a50": ["suite", "unsubscribing when not subscribed is a no-op"],
+
+  "505be1dd": ["suite", "summarize with no selector is refused"],
+  "cd1d4836": ["suite", "the source records still exist afterwards"],
+  "d567196e": ["tests", "a stack with no summarizer does not declare summarize"],
+  "c1ccf894": ["unverifiable", "a server's own timeout policy is not observable"],
+
+  "7cad5118": ["suite", "and 'auto' is among the styles"],
+  "73744c6e": ["suite", "and it drops whole records rather than truncating one"],
+  "30faa5c6": ["suite", "every server can render without a model"],
+  "63b0f843": ["tests", "a server with no renderer does not offer 'model'"],
+  "04b055e6": ["suite", "the default rendering is the deterministic one"],
+  "75a42cd8": ["suite", "the default rendering is the deterministic one"],
+  "3d4454f7": ["suite", "an unknown method is refused"],
+  "7a4105ab": ["suite", "an unavailable method is refused, not substituted"],
+  "b35e8018": ["suite", "and the ids it contains"],
+  "0d80fc5c": ["suite", "the records are still returned in full"],
+  "95e48a9c": ["suite", "a server without 'prompt' ignores the parameter"],
+  "5d6e3b7e": ["suite", "describe reports which methods exist"],
+
+  "1c7dce74": ["suite", "timeline can be filtered to one session"],
+
+  "7d947ce8": ["client", "no thresholding or cross-server merging anywhere in the client"],
+  "2f9d514e": ["suite", "scores descend"],
+  "56f31bd4": ["client", "advice to callers"],
+
+  "3b8ecbbf": ["unverifiable", "the suite has no authenticated transport and no second principal; §6 is about deployments it cannot construct"],
+  "d4399fc2": ["unverifiable", "same: requires an authenticated transport the suite does not provide"],
+
+  "d063af9c": ["prose", "explains why §8.3.1 is normative and §6.1 is not"],
+
+  "a004985b": ["client", "the client never parses an error message"],
+
+  "6d23efaa": ["suite", "a batch is refused with -32600"],
+  "51bf9b74": ["suite", "a pushed notification carries no id"],
+
+  "730de436": ["tests", "LocalTransport round-trips through JSON"],
+  "64ac1f07": ["tests", "a subscribed local client is pushed the write"],
+
+  "0e0b6dbc": ["unverifiable", "a violation breaks the transport rather than producing a result: the suite cannot complete at all against a server writing anything else to stdout"],
+  "8fd7f18a": ["unverifiable", "same — stray stdout output makes every response unparseable"],
+  "58f9fd12": ["client", "StdioTransport stashes notifications while awaiting a response"],
+  "78524b0b": ["unverifiable", "the suite closes stdin and kills after a timeout, so a server that never exits is reported as slow rather than wrong"],
+  "46d44ec4": ["prose", "guidance for transports this document does not define"],
+
+  "e4f9cb29": ["suite", "a batch is refused with -32600"],
+  "52881cb1": ["suite", "GET on the rpc endpoint is 405"],
+  "3624f7de": ["suite", "subscribe without push is -32003"],
+
+  "43fa105d": ["suite", "a foreign Origin is refused with 403"],
+  "09cf1c78": ["suite", "a foreign Origin is refused with 403"],
+  "08a9bb45": ["unverifiable", "a deployment choice; the suite connects to whatever address it was given"],
+
+  "d4fc9689": ["client", "the client sets the header on every POST"],
+  "b25e3cde": ["suite", "an incompatible version header is refused with 400 and -32007"],
+  "d64f544a": ["suite", "describe reports a protocol"],
+
+  "70543a72": ["suite", "the well-known profile reports the protocol"],
+
+  "6e212dde": ["prose", "process guidance for future versions"]
+}

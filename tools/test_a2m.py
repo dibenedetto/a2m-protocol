@@ -65,6 +65,15 @@ def test_jsonrpc() -> None:
 	client = Client(LocalTransport(dispatcher))
 	check("client unwraps results", client.call("add", {"a": 4, "b": 5}) == 9)
 
+	# spec §8.1 -- in-process payloads still go through JSON, so a local server
+	# cannot quietly accept something a remote one could never receive.
+	dispatcher.register("echo", lambda value: value)
+	try:
+		Client(LocalTransport(dispatcher)).call("echo", {"value": {1, 2}})
+		check("LocalTransport round-trips through JSON", False, "a set survived the transport")
+	except TypeError:
+		check("LocalTransport round-trips through JSON", True)
+
 	try:
 		client.call("nope")
 		check("client raises on error", False)
@@ -591,6 +600,30 @@ def test_sessions() -> None:
 			check(f"{method} without 'sessions' is refused", False)
 		except JsonRpcError as exc:
 			check(f"{method} without 'sessions' is refused", exc.code == -32003, exc.code)
+
+
+def test_closing_flushes() -> None:
+	print("== closing a session ==")
+
+	stack = MemoryStack(tiers=[
+		MemoryTier("working" , capacity = 100, spill_to = "episodic"),
+		MemoryTier("episodic", capacity = 0),
+	])
+	for turn in range(4):
+		stack.remember(f"turn {turn}", session="chat-1")
+	stack.remember("another conversation entirely", session="chat-2")
+
+	# Well under capacity, so nothing would spill on pressure alone.
+	check("nothing spilled under capacity", len(stack.records_in("episodic")) == 0)
+
+	stack.close_session("chat-1")
+	left   = [r for r in stack.records_in("working")  if r.session == "chat-1"]
+	landed = [r for r in stack.records_in("episodic") if r.session == "chat-1"]
+
+	check("closing flushes the working tier", not left and len(landed) == 4, (left, landed))
+	check("and leaves other conversations alone",
+	      len([r for r in stack.records_in("working") if r.session == "chat-2"]) == 1)
+	check("closing does not destroy anything", len(stack.records) == 5, len(stack.records))
 
 
 def test_keys() -> None:
@@ -1165,6 +1198,7 @@ def main() -> int:
 	test_concurrency()
 	test_sharing()
 	test_sessions()
+	test_closing_flushes()
 	test_keys()
 	test_caller_embeddings()
 	test_external()
