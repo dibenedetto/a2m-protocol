@@ -543,6 +543,18 @@ def test_embeddings(client: Client, report: Report, profile: dict[str, Any]) -> 
 	report.check("describe reports an embedding contract", isinstance(contract, dict), contract)
 	report.check("it names a metric", contract.get("metric") in ("cosine", "dot", "l2"), contract)
 
+	# What the store *could* compare against what it *is* comparing with. A
+	# caller holding inner-product vectors needs to tell "misconfigured" from
+	# "unsuitable", and `metric` alone cannot (spec §3.7).
+	offered = contract.get("metrics")
+	if offered is None:
+		report.skip("the metric menu contains the metric in use", "no 'metrics' reported -- it is a SHOULD")
+	else:
+		report.check("the metric menu is a list of known metrics",
+		             isinstance(offered, list) and set(offered) <= {"cosine", "dot", "l2"}, offered)
+		report.check("and contains the metric actually in use",
+		             contract.get("metric") in offered, contract)
+
 	width  = contract.get("dimensions") or 8
 	marker = uuid.uuid4().hex[:8]
 	near   = [1.0] + [0.0] * (width - 1)

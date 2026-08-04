@@ -36,7 +36,8 @@ implementations/store_postgres.py    the same on PostgreSQL + pgvector. Optional
 implementations/server_federated.py  one A2M server per tier, one router in front
 implementations/bridge_mcp.py        any A2M server as an MCP tool server. Stdlib only.
 implementations/adapters/langchain.py  LangChain chat history + retriever. Optional dep.
-implementations/adapters/agno.py       Agno VectorDb. Optional dep.
+implementations/adapters/agno.py       Agno VectorDb (knowledge). Optional dep.
+implementations/adapters/agno_db.py    Agno BaseDb (user memories). Optional dep.
 implementations/adapters/crewai.py     CrewAI StorageBackend. Optional dep, needs Python <= 3.13.
 implementations/adapters/autogen.py    AutoGen Memory protocol. Optional dep.
 

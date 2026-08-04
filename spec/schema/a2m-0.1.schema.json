@@ -732,6 +732,18 @@
                 "string",
                 "null"
               ]
+            },
+            "metrics": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "cosine",
+                  "dot",
+                  "l2"
+                ]
+              },
+              "description": "Every comparison the storage could be configured for; `metric` is the one in use."
             }
           }
         }

@@ -130,62 +130,48 @@ against it.
 <section>
 <h2>A2M and MCP</h2>
 <p class="lead">
-MCP is how a model calls a tool. A2M is how programs share a memory store. Most
-projects want both.
+They are not alternatives. MCP connects one agent to its capabilities. A2M
+connects many programs to one store.
 </p>
+<p>You notice the difference the moment there are two of anything:</p>
+<div class="scroll">
+<pre><code>   MCP                              A2M
+
+   Claude Code                      Claude Code ──MCP──▶ [bridge] ─┐
+        │                           LangChain job ─────────────────┤
+       tools                        n8n workflow ──────────────────┼──▶ one store
+        │                           CrewAI crew ────────────────────┤
+   ┌────┴────┐                      nightly sync script ───────────┘
+ files  search  memory
+                                    every one of them sees the same memory</code></pre>
+</div>
 <p>
-They are built to compose: A2M uses the same JSON-RPC 2.0, the same stdio
-framing and the same single-endpoint HTTP binding as MCP, and its methods live
-under <code>memory/</code> precisely so one endpoint can serve both. A runtime
-that already speaks MCP needs no second code path.
+MCP is a client-to-server protocol for a model to call capabilities. It works
+well, and A2M does not replace it — the bridge is a supported way in, and one of
+those five lanes above. What MCP does not do is give a <em>second</em> program a
+way to agree with the first about what a memory record is: put two MCP memory
+servers side by side and they share nothing, because a tool result is prose
+written for a model to read.
 </p>
-<p>
-What differs is who is on the receiving end. Ask an MCP memory tool for
-something and you get text, because a tool result is written for a model to
-read:
-</p>
-<pre><code>Found 3 memories:
-1. the deploy key rotates every ninety days (score 0.72)
-2. ...</code></pre>
-<p>Ask A2M and you get a record:</p>
+<p>Which is fine when a model is reading, and useless when a program is:</p>
 <pre><code class="language-json">{ "id": "01J8Z9", "content": "the deploy key rotates every ninety days",
   "created_at": "2026-07-28T10:15:30.123Z", "tier": "semantic",
   "key": "ops/deploy-key", "revision": 2, "score": 0.72 }</code></pre>
 <p>
-<em>Couldn't a model just parse the first into the second?</em> Often, yes — and
-for an agent that is frequently good enough, which is exactly why the bridge
-below exists. But it is the wrong default for three reasons:
+A router merging four backends needs <code>id</code> and <code>score</code>. A
+framework adapter needs <code>tier</code> to know whether to replay or search. A
+sync job needs <code>revision</code> to tell a correction from a duplicate. None
+of them has a model in the loop, and none should need one to read a memory
+record — which is why A2M returns records and adds text only when asked.
 </p>
-<ul>
-<li><strong>Not every consumer is a model.</strong> A router merging results from
-four backends, a framework adapter, a sync job, a conformance suite — none has an
-LLM in the loop, and none should need one to read a memory record.</li>
-<li><strong>Parsing is probabilistic; a round-trip is not.</strong>
-<code>metadata</code> has to come back byte-for-byte in structure. A model that
-reformats a float, drops a null or invents a plausible <code>revision</code> has
-corrupted the store's state, silently.</li>
-<li><strong>Text has no contract.</strong> Two memory servers phrase their
-results differently, so the parser must be written per server — which is the silo
-A2M exists to remove, rebuilt one layer up.</li>
-</ul>
-<p>
-You also pay an inference call and its latency to recover structure that was
-never lost on the wire.
-</p>
-<p><strong>So use whichever matches your consumer:</strong></p>
-<div class="scroll">
-<table>
-<thead><tr><th>Your consumer</th><th>Use</th></tr></thead>
-<tbody>
-<tr><td>An agent, through an MCP client (Claude Code, Cursor, Claude Desktop)</td><td>the <strong>bridge</strong> — one command, and every MCP client can use any A2M store</td></tr>
-<tr><td>Your own code: an adapter, a router, a pipeline, another agent</td><td><strong>A2M directly</strong></td></tr>
-</tbody>
-</table>
-</div>
+<p><strong>Using it from an agent takes one line</strong>, and every MCP client
+works against any A2M store:</p>
 <pre><code class="language-bash">python -m implementations.bridge_mcp --stdio python -m implementations.store_sqlite memory.db</code></pre>
 <p class="muted">
-The bridge is one dependency-free file, and it builds its tool list from
-whatever the store underneath declares.
+One dependency-free file, with its tool list derived from whatever the store
+underneath declares. Same plumbing on both sides — same JSON-RPC 2.0, same stdio
+framing, methods under <code>memory/</code> so one endpoint can serve both — so
+bridging is a method table, not a translation.
 </p>
 </section>
 

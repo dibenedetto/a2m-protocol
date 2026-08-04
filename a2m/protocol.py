@@ -46,7 +46,8 @@ from   a2m.jsonrpc import (
 	make_notification, serve_http, serve_stdio,
 )
 from   a2m.memory  import MemoryStack, to_rfc3339
-from   a2m.prompt  import render
+from   a2m.prompt    import render
+from   a2m.retrieval import METRICS
 
 
 A2M_VERSION = "a2m/0.1"
@@ -251,6 +252,7 @@ class MemoryServer:
 		dimensions           : int         = None,
 		embedding_model      : str         = None,
 		embedding_metric     : str         = "cosine",
+		embedding_metrics    : list[str]   = None,
 		push_events          : bool        = True,
 		event_retention      : int         = 1024,
 		summarize_fn         : Callable    = None,
@@ -289,6 +291,10 @@ class MemoryServer:
 		# Only consulted when the stack's scorer has no opinion -- a lexical or
 		# hybrid stack that still stores vectors for someone else to compare.
 		self.embedding_metric     = embedding_metric
+		# Every comparison this storage could be configured for. The reference
+		# stack compares in Python, so it can do all three; a store built on an
+		# index that was created for one of them should narrow this to the truth.
+		self.embedding_metrics    = list(embedding_metrics) if embedding_metrics else list(METRICS)
 		self.push_events          = bool(push_events)
 		self.events_log           = EventLog(retain=event_retention)
 		self.summarizer_model     = summarizer_model
@@ -888,6 +894,11 @@ class MemoryServer:
 		return {
 			"dimensions" : self.dimensions,
 			"metric"     : metric or self.embedding_metric,
+			# What the storage *could* compare, against what it is comparing
+			# with now. A caller holding inner-product vectors needs to know
+			# whether this store is misconfigured or simply unsuitable, and
+			# `metric` alone cannot tell it apart (spec §3.7).
+			"metrics"    : list(self.embedding_metrics),
 			"model"      : self.embedding_model,
 		}
 

@@ -54,6 +54,7 @@ FAILED : list[str] = []
 FACTS = {
 	"langchain" : "the langchain deploy key rotates every ninety days",
 	"agno"      : "the agno release branch is cut on thursdays",
+	"agno-db"   : "the agnodb vault token expires after two weeks",
 	"crewai"    : "the crewai rollback window is twenty-four hours",
 	"autogen"   : "the autogen on-call rotation hands over on monday",
 	"raw"       : "the raw client vault token expires each quarter",
@@ -123,6 +124,7 @@ def adapter_langchain(memory: MemoryClient, tier: str):
 	def read(query: str) -> list[str]:
 		return [document.page_content for document in retriever.invoke(query)]
 
+	write.embeds = False
 	return write, read
 
 
@@ -149,6 +151,45 @@ def adapter_agno(memory: MemoryClient, tier: str):
 
 	def read(query: str) -> list[str]:
 		return [document.content for document in knowledge.search(query, limit=10)]
+
+	# Without an Agno embedder configured, documents are stored with no vector.
+	write.embeds = False
+	return write, read
+
+
+def adapter_agno_db(memory: MemoryClient, tier: str):
+	"""Agno's *relational* store, over the shared store.
+
+	Agno persists in two places: a VectorDb for knowledge and a BaseDb for user
+	memories. Covering only the first left half of an Agno agent's state in a
+	private file, which is the gap this row exists to keep closed.
+
+	Args:
+		memory (MemoryClient): The shared A2M client.
+		tier (str): Where standalone facts belong.
+
+	Returns:
+		tuple: (write, read) callables.
+	"""
+	from agno.db.schemas                     import UserMemory
+	from implementations.adapters.agno_db    import A2MDb
+
+	database = A2MDb(memory, namespace="interop/memories", tier=tier)
+	counter  = {"n": 0}
+
+	def write(text: str) -> None:
+		counter["n"] += 1
+		database.upsert_user_memory(UserMemory(
+			memory    = text,
+			memory_id = f"interop-{counter['n']}",
+			user_id   = "interop",
+		))
+	write.embeds = False
+
+	def read(query: str) -> list[str]:
+		# search_content goes through memory/recall, so this reads the whole
+		# store rather than only what Agno's own database wrote.
+		return [m.memory for m in database.get_user_memories(search_content=query, limit=10)]
 
 	return write, read
 
@@ -178,11 +219,14 @@ def adapter_crewai(memory: MemoryClient, tier: str):
 		backend.save([MemoryRecord(content=text, scope="/interop", embedding=list(vector))])
 
 	def read(query: str) -> list[str]:
-		# CrewAI searches by vector, so it retrieves what shares the store
-		# rather than what shares the query's words. Everything written through
-		# this adapter is reachable; everything else is found by the other
-		# adapters, which is exactly the split the matrix is measuring.
 		return [record.content for record, _ in backend.search(vector, limit=50)]
+
+	# CrewAI's StorageBackend.search takes a vector and no text, so it can only
+	# find records that carry one. That is a property of CrewAI's interface, not
+	# of A2M or of this adapter -- there is nothing to compare a text-only
+	# record against. Declaring it here keeps the grid honest: those cells are
+	# marked rather than silently passed or misleadingly failed.
+	read.needs_vectors = True
 
 	return write, read
 
@@ -210,6 +254,7 @@ def adapter_autogen(memory: MemoryClient, tier: str):
 	def read(query: str) -> list[str]:
 		return [entry.content for entry in asyncio.run(remembered.query(query)).results]
 
+	write.embeds = False
 	return write, read
 
 
@@ -232,12 +277,14 @@ def adapter_raw(memory: MemoryClient, tier: str):
 	def read(query: str) -> list[str]:
 		return [record["content"] for record in memory.recall(query=query, limit=10)]
 
+	write.embeds = False
 	return write, read
 
 
 ADAPTERS = {
 	"langchain" : adapter_langchain,
 	"agno"      : adapter_agno,
+	"agno-db"   : adapter_agno_db,
 	"crewai"    : adapter_crewai,
 	"autogen"   : adapter_autogen,
 	"raw"       : adapter_raw,
@@ -309,11 +356,23 @@ def main() -> int:
 	header = "writer \\ reader".ljust(18) + "".join(n.ljust(width) for n in names)
 	print(f"  {header}")
 
-	grid = {}
+	grid  = {}
+	notes = []
 	for writer in names:
 		row = []
 		for reader in names:
-			_, read = adapters[reader]
+			write, read = adapters[writer][0], adapters[reader][1]
+
+			# A reader that compares vectors cannot see a record written
+			# without one. That is the writing framework's shape meeting the
+			# reading framework's, and no adapter can bridge it -- so it is
+			# marked, not scored.
+			if getattr(read, "needs_vectors", False) and getattr(write, "embeds", True) is False:
+				row.append("n/a")
+				grid[(writer, reader)] = "n/a"
+				notes.append(f"{reader} compares vectors; {writer} writes none")
+				continue
+
 			try:
 				found = read(FACTS[writer])
 				ok    = any(FACTS[writer] in str(text) for text in found)
@@ -326,7 +385,12 @@ def main() -> int:
 
 	print()
 	for (writer, reader), outcome in grid.items():
+		if outcome == "n/a":
+			continue
 		check(f"{reader} reads what {writer} wrote", outcome == "ok", outcome)
+
+	for note in dict.fromkeys(notes):
+		print(f"  n/a   {note}")
 
 	memory.close()
 

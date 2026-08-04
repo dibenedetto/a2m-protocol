@@ -43,6 +43,7 @@ GUARDED = ("a2m", "implementations", "tools", "examples")
 ALLOWED = {
 	"implementations/adapters/langchain.py" : {"langchain_core", "pydantic"},
 	"implementations/adapters/agno.py"      : {"agno"},
+	"implementations/adapters/agno_db.py"   : {"agno"},
 	"implementations/adapters/crewai.py"    : {"crewai"},
 	"implementations/adapters/autogen.py"   : {"autogen_core"},
 	# An optional backend. Nothing imports it: the federation names it as a

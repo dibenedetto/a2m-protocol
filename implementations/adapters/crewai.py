@@ -287,6 +287,15 @@ class A2MStorageBackend:
 
 		Returns:
 			list[tuple[MemoryRecord, float]]: Best first.
+
+		Note:
+			CrewAI's interface passes a vector and no text, so this can only
+			find records that **carry a vector**. A record written by a
+			framework that stores text without embedding it is invisible here,
+			and no adapter can fix that: there is nothing to compare against.
+			It is a property of `StorageBackend.search`, not of A2M, and it is
+			why `tools/test_interop.py` marks this reader's row rather than
+			failing it.
 		"""
 		want  = max(limit * 3, 15) if categories else limit
 		found = self.client.recall(

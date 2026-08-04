@@ -88,25 +88,30 @@ LangChain agent     Agno agent      n8n node        CrewAI crew
 
 ## A2M and MCP
 
-**MCP is how a model calls a tool. A2M is how programs share a memory store.
-Most projects want both.**
-
-They are built to compose: A2M uses the same JSON-RPC 2.0, the same stdio
-framing and the same single-endpoint HTTP binding as MCP, and its methods live
-under `memory/` precisely so one endpoint can serve both. A runtime that already
-speaks MCP needs no second code path.
-
-What differs is who is on the receiving end. Ask an MCP memory tool for
-something and you get text, because a tool result is written for a model to
-read:
+They are not alternatives. **MCP connects one agent to its capabilities. A2M
+connects many programs to one store.** You notice the difference the moment
+there are two of anything:
 
 ```
-Found 3 memories:
-1. the deploy key rotates every ninety days (score 0.72)
-2. ...
+   MCP                              A2M
+
+   Claude Code                      Claude Code ──MCP──▶ [bridge] ─┐
+        │                           LangChain job ─────────────────┤
+       tools                        n8n workflow ──────────────────┼──▶ one store
+        │                           CrewAI crew ────────────────────┤
+   ┌────┴────┐                      nightly sync script ───────────┘
+ files  search  memory
+                                    every one of them sees the same memory
 ```
 
-Ask A2M and you get a record:
+MCP is a client-to-server protocol for a model to call capabilities. It works
+well, and A2M does not replace it — the bridge is a supported way in, and one of
+those five lanes above. What MCP does not do is give a *second* program a way to
+agree with the first about what a memory record is: put two MCP memory servers
+side by side and they share nothing, because a tool result is prose written for
+a model to read.
+
+Which is fine when a model is reading, and useless when a program is:
 
 ```json
 { "id": "01J8Z9", "content": "the deploy key rotates every ninety days",
@@ -114,36 +119,23 @@ Ask A2M and you get a record:
   "key": "ops/deploy-key", "revision": 2, "score": 0.72 }
 ```
 
-*Couldn't a model just parse the first into the second?* Often, yes — and for an
-agent that is frequently good enough, which is exactly why the bridge below
-exists. But it is the wrong default for three reasons:
+A router merging four backends needs `id` and `score`. A framework adapter needs
+`tier` to know whether to replay or search. A sync job needs `revision` to tell a
+correction from a duplicate. None of them has a model in the loop, and none of
+them should need one to read a memory record — which is why A2M returns records
+and adds text only when asked (§4.16).
 
-- **Not every consumer is a model.** A router merging results from four
-  backends, a framework adapter, a sync job, a conformance suite — none of them
-  has an LLM in the loop, and none should need one to read a memory record.
-- **Parsing is probabilistic; a round-trip is not.** `metadata` has to come back
-  byte-for-byte in structure. A model that reformats a float, drops a null or
-  invents a plausible `revision` has corrupted the store's state, silently.
-- **Text has no contract.** Two memory servers phrase their results differently,
-  so the parser must be written per server — which is the silo A2M exists to
-  remove, rebuilt one layer up.
-
-You also pay an inference call and its latency to recover structure that was
-never lost on the wire.
-
-**So use whichever matches your consumer:**
-
-| Your consumer | Use |
-|---|---|
-| An agent, through an MCP client (Claude Code, Cursor, Claude Desktop) | the **bridge** — one command, and every MCP client can use any A2M store |
-| Your own code: an adapter, a router, a pipeline, another agent | **A2M directly** |
+**Using it from an agent takes one line**, and every MCP client works against
+any A2M store:
 
 ```bash
 python -m implementations.bridge_mcp --stdio python -m implementations.store_sqlite memory.db
 ```
 
-The bridge is [one dependency-free file](implementations/bridge_mcp.py), and it
-builds its tool list from whatever the store underneath declares.
+[One dependency-free file](implementations/bridge_mcp.py), with its tool list
+derived from whatever the store underneath declares. Same plumbing on both
+sides — same JSON-RPC 2.0, same stdio framing, methods under `memory/` so one
+endpoint can serve both — so bridging is a method table, not a translation.
 
 ---
 

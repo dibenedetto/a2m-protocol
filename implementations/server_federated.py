@@ -569,15 +569,33 @@ class MemoryRouter:
 			dict: 'dimensions', 'metric' and 'model', plus 'disagreement' listing
 			every distinct width the backends reported when they do not match.
 		"""
-		seen = []
+		seen     = []
+		metrics  = None
+		in_use   = []
 		for name in self.order:
 			contract = self._call(name, "memory/describe", {}).get("embeddings") or {}
 			if contract.get("dimensions") is not None:
 				seen.append(contract["dimensions"])
+			if contract.get("metric"):
+				in_use.append(contract["metric"])
+			# A record may move between tiers, so it has to stay comparable
+			# after it lands: the federation can only offer what *every*
+			# backend could do (spec §3.7).
+			offered = set(contract.get("metrics") or ([contract["metric"]] if contract.get("metric") else []))
+			metrics = offered if metrics is None else (metrics & offered)
 
-		profile = {"dimensions": seen[0] if seen else None, "metric": "cosine", "model": None}
+		profile = {
+			"dimensions" : seen[0] if seen else None,
+			"metric"     : in_use[0] if in_use else "cosine",
+			"metrics"    : sorted(metrics or []),
+			"model"      : None,
+		}
 		if len(set(seen)) > 1:
 			profile["disagreement"] = sorted(set(seen))
+		# Backends comparing differently is worse than backends of different
+		# widths: a spilled record silently changes how it ranks.
+		if len(set(in_use)) > 1:
+			profile["metric_disagreement"] = sorted(set(in_use))
 
 		return profile
 
