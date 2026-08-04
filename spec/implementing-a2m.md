@@ -359,6 +359,19 @@ stack can be exposed over A2M in an afternoon: implement `describe` and
 `recall`, return `-32004 READ_ONLY` from `remember` and `forget`, and every A2M
 client works against it.
 
+**Where a RAG system's three moving parts end up.** A2M owns one of them and
+deliberately declines the other two:
+
+| | who owns it | what A2M provides |
+|---|---|---|
+| **chunker** | the ingester, entirely | nothing — but `group` keeps a document's chunks together through eviction (§3.4) |
+| **embedder** | the caller, or the server | a vector is stored **verbatim** and never regenerated (§3.7); `describe` names the model |
+| **comparer** | the server's index | `describe` names the `metric`; it is declared, not selected, and a mismatch is invisible |
+
+The asymmetry is worth internalising before you bring your own vectors: you can
+own the embedder completely and cannot own the comparer at all. Check `metric`,
+because nothing will check it for you.
+
 Three ways to bring a corpus in, in increasing order of separation:
 
 **Load it into `semantic`.** Simplest. Documents become ordinary records and
