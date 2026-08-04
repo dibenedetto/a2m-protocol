@@ -78,16 +78,16 @@ eight as a pass.
 
 | target | expected |
 |---|---|
-| `python -m tools.test_a2m` | 263 passed, 0 failed |
+| `python -m tools.test_a2m` | 271 passed, 0 failed |
 | `python -m doctest a2m/*.py` (memory, text, retrieval, jsonrpc, protocol, prompt) | silent |
-| `--stdio python -m a2m` | 120/120, 2 skipped |
+| `--stdio python -m a2m` | 121/121, 2 skipped |
 | `--stdio python implementations/server_minimal.py` | 37/37, 11 skipped |
 | `--stdio node --experimental-strip-types implementations/server_minimal.ts` | 47/47, 10 skipped |
-| `--stdio python -m implementations.store_sqlite s.db` | 120/120 |
-| `--stdio python -m implementations.store_postgres postgresql://a2m:a2m@127.0.0.1:55432/a2m` | 120/120 |
-| `--stdio python -m implementations.server_federated r/` | 95/95 (declares no summarizer) |
-| `--stdio python -m implementations.server_federated postgresql://a2m:a2m@127.0.0.1:55432/a2mfed --backend postgres` | 95/95 |
-| `--http http://127.0.0.1:8778/` (start a server with `--http` first) | 120/120 |
+| `--stdio python -m implementations.store_sqlite s.db` | 121/121 |
+| `--stdio python -m implementations.store_postgres postgresql://a2m:a2m@127.0.0.1:55432/a2m` | 121/121 |
+| `--stdio python -m implementations.server_federated r/` | 96/96 (declares no summarizer) |
+| `--stdio python -m implementations.server_federated postgresql://a2m:a2m@127.0.0.1:55432/a2mfed --backend postgres` | 96/96 |
+| `--http http://127.0.0.1:8778/` (start a server with `--http` first) | 121/121 |
 | `python -m tools.demo_stack` and `--router` | 37 and 33 |
 | `python -m examples.cross_framework` | 6/6 |
 | `--stdio python implementations/server_readonly.py` | 32/32, read-only profile |

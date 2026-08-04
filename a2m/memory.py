@@ -7,7 +7,7 @@ import uuid
 from   typing        import Any, Callable
 
 
-from   a2m.retrieval import LexicalScorer, Scorer
+from   a2m.retrieval import EmbeddingScorer, HybridScorer, LexicalScorer, Scorer
 
 
 WEIGHTS = {"lexical": 0.60, "recency": 0.25, "salience": 0.15}
@@ -415,7 +415,20 @@ class MemoryStack:
 		self.tiers          = {tier.name: tier for tier in tiers}
 		self.order          = [tier.name for tier in tiers]
 		self.consolidate_fn = consolidate_fn
-		self.scorer         = scorer or LexicalScorer()
+		# Lexical for text, and vectors for callers who bring their own. The
+		# embedding half carries **no model** -- it ranks only records that
+		# already have a vector and abstains otherwise, so this costs nothing
+		# and reaches no network.
+		#
+		# It has to be here rather than opt-in, because a store declaring the
+		# `embeddings` capability and then ranking by recency is a store that
+		# lies: a caller supplying a query vector got an answer that ignored it,
+		# with a `metric` in `describe` insisting otherwise. Purely lexical
+		# stacks are still available by passing LexicalScorer() explicitly.
+		self.scorer         = scorer or HybridScorer([
+			(LexicalScorer()        , 0.5),
+			(EmbeddingScorer(None)  , 0.5),
+		])
 		self.weights        = dict(WEIGHTS)
 		self.records        : dict[str, MemoryRecord] = {}
 

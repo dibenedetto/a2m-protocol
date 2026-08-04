@@ -238,13 +238,13 @@ them:
 
 | | storage | declares | conformance |
 |---|---|---|---|
-| `python -m a2m` | a dict in memory | everything | 120/120 |
+| `python -m a2m` | a dict in memory | everything | 121/121 |
 | [server_minimal.py](implementations/server_minimal.py) | a dict, stdlib only | `core` only | 37/37 |
 | [server_minimal.ts](implementations/server_minimal.ts) | a Map, **TypeScript** | `core` + `keys` | 47/47 |
 | [server_readonly.py](implementations/server_readonly.py) | a fixed corpus, **read-only** | `core` only | 32/32 |
-| [store_sqlite.py](implementations/store_sqlite.py) | SQLite + sqlite-vec | everything | 120/120 |
-| [store_postgres.py](implementations/store_postgres.py) | **PostgreSQL + pgvector** | everything | 120/120 |
-| [server_federated.py](implementations/server_federated.py) | four A2M servers | all but `summarize` | 95/95 |
+| [store_sqlite.py](implementations/store_sqlite.py) | SQLite + sqlite-vec | everything | 121/121 |
+| [store_postgres.py](implementations/store_postgres.py) | **PostgreSQL + pgvector** | everything | 121/121 |
+| [server_federated.py](implementations/server_federated.py) | four A2M servers | all but `summarize` | 96/96 |
 
 Checks are grouped by capability and skipped when a server does not declare one.
 Declaring a capability and then not honouring it *is* a failure — a client
@@ -337,7 +337,7 @@ no changes, because everything it does goes through `memory/*`. That is the
 protocol boundary being load-bearing rather than decorative.
 
 ```bash
-python -m tools.test_a2m                       # 263 checks, offline
+python -m tools.test_a2m                       # 271 checks, offline
 python -m tools.demo_stack                     # the whole stack, on disk
 python -m tools.demo_stack --router            # same, federated across processes
 python -m a2m                                  # the reference server, in memory

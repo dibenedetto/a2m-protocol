@@ -79,13 +79,13 @@ Everything runs from the repository root.
 
 ```bash
 python -m tools.check_stdlib_only     # no dependency crept in anywhere
-python -m tools.test_a2m              # 263 checks, offline, no test runner
+python -m tools.test_a2m              # 271 checks, offline, no test runner
 python -m doctest a2m/memory.py a2m/text.py a2m/retrieval.py a2m/jsonrpc.py a2m/protocol.py  # examples are real
-python -m tools.conformance --stdio python -m a2m                            # 120/120
+python -m tools.conformance --stdio python -m a2m                            # 121/121
 python -m tools.conformance --stdio python implementations/server_minimal.py # 37/37, 11 skipped
 python -m tools.conformance --stdio python implementations/server_readonly.py # 32/32 read-only
-python -m tools.conformance --stdio python -m implementations.store_sqlite s.db      # 120/120
-python -m tools.conformance --stdio python -m implementations.server_federated r/    # 95/95 (no summarizer)
+python -m tools.conformance --stdio python -m implementations.store_sqlite s.db      # 121/121
+python -m tools.conformance --stdio python -m implementations.server_federated r/    # 96/96 (no summarizer)
 python -m tools.conformance --stdio node --experimental-strip-types implementations/server_minimal.ts  # 47/47
 python -m tools.demo_stack && python -m tools.demo_stack --router   # 37 and 33
 
@@ -93,9 +93,9 @@ python -m tools.demo_stack && python -m tools.demo_stack --router   # 37 and 33
 docker run -d --name a2m-pg -e POSTGRES_PASSWORD=a2m -e POSTGRES_USER=a2m \
   -e POSTGRES_DB=a2m -p 55432:5432 pgvector/pgvector:pg16
 python -m tools.conformance --stdio python -m implementations.store_postgres \
-  postgresql://a2m:a2m@127.0.0.1:55432/a2m                          # 120/120
+  postgresql://a2m:a2m@127.0.0.1:55432/a2m                          # 121/121
 python -m tools.conformance --stdio python -m implementations.server_federated \
-  postgresql://a2m:a2m@127.0.0.1:55432/a2mfed --backend postgres    # 95/95
+  postgresql://a2m:a2m@127.0.0.1:55432/a2mfed --backend postgres    # 96/96
 # (the a2mfed database must exist: docker exec a2m-pg psql -U a2m -d a2m -c "CREATE DATABASE a2mfed")
 
 python implementations/client.py --stdio python implementations/server_minimal.py -- describe
@@ -104,7 +104,7 @@ python implementations/client.py --stdio python implementations/server_minimal.p
 Over stdio the full-capability targets include push delivery end to end. Over
 HTTP the suite instead checks that push is honestly refused, plus the binding
 checks stdio cannot reach — Origin, version header, 405, well-known — for
-**120/120** there too. Start a server with `--http` first, then
+**121/121** there too. Start a server with `--http` first, then
 `python -m tools.conformance --http http://127.0.0.1:8778/`.
 
 **A change is not done until all eight conformance targets still pass.** They

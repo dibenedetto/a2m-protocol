@@ -250,6 +250,7 @@ class MemoryServer:
 		max_records_per_call : int         = 256,
 		dimensions           : int         = None,
 		embedding_model      : str         = None,
+		embedding_metric     : str         = "cosine",
 		push_events          : bool        = True,
 		event_retention      : int         = 1024,
 		summarize_fn         : Callable    = None,
@@ -285,6 +286,9 @@ class MemoryServer:
 		self.max_records_per_call = int(max_records_per_call)
 		self.dimensions           = dimensions
 		self.embedding_model      = embedding_model
+		# Only consulted when the stack's scorer has no opinion -- a lexical or
+		# hybrid stack that still stores vectors for someone else to compare.
+		self.embedding_metric     = embedding_metric
 		self.push_events          = bool(push_events)
 		self.events_log           = EventLog(retain=event_retention)
 		self.summarizer_model     = summarizer_model
@@ -875,9 +879,15 @@ class MemoryServer:
 			dict: 'dimensions' (None until the first vector fixes it), 'metric',
 			and 'model' when the server has an opinion about which space it is in.
 		"""
+		# Ask the scorer rather than assuming. Hardcoding "cosine" here made the
+		# field unfalsifiable: a store ranking by inner product would have
+		# reported cosine and every caller bringing dot-trained vectors would
+		# have been silently misranked, with `describe` insisting otherwise.
+		metric = getattr(getattr(self.stack, "scorer", None), "metric", None)
+
 		return {
 			"dimensions" : self.dimensions,
-			"metric"     : "cosine",
+			"metric"     : metric or self.embedding_metric,
 			"model"      : self.embedding_model,
 		}
 

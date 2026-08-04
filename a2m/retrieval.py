@@ -56,6 +56,78 @@ def cosine(a: list[float], b: list[float]) -> float:
 	return dot / norm if norm else 0.0
 
 
+def dot(a: list[float], b: list[float]) -> float:
+	"""Inner product, mapped monotonically into 0..1.
+
+	Unlike cosine, this keeps magnitude: a longer vector in the same direction
+	scores higher. Some retrieval models are trained for exactly that, and
+	normalising their output throws away the signal they encode in length.
+
+	The raw inner product is unbounded, and §5.3 asks for scores in 0..1, so it
+	is squashed by `x / (1 + |x|)` — which is **order-preserving**, so ranking is
+	the true inner product's and only the reported number is compressed. A
+	negative product means "points the other way" and lands at 0.
+
+	Args:
+		a (list[float]): First vector.
+		b (list[float]): Second vector.
+
+	Returns:
+		float: Similarity in 0..1, monotone in the inner product.
+
+	Example:
+		>>> dot([1.0, 0.0], [3.0, 0.0]) > dot([1.0, 0.0], [0.9, 0.0])
+		True
+		>>> dot([1.0, 0.0], [-1.0, 0.0])
+		0.0
+	"""
+	if not a or not b or len(a) != len(b):
+		return 0.0
+
+	product = sum(x * y for x, y in zip(a, b))
+	return max(0.0, product / (1.0 + abs(product)))
+
+
+def l2(a: list[float], b: list[float]) -> float:
+	"""Euclidean distance, mapped monotonically into 0..1 as a similarity.
+
+	The natural metric of most index structures, and the FAISS default. It is a
+	*distance*, so it has to be inverted to rank alongside the others: nearer
+	must score higher. `1 / (1 + d)` does that, is bounded by 1 at zero
+	distance, and never reaches 0.
+
+	Note this disagrees with cosine on magnitude in the opposite direction to
+	`dot`: a vector twice as long in the same direction is *further away*, so it
+	ranks lower rather than higher. That is why the three are not
+	interchangeable and why a store has to say which it uses.
+
+	Args:
+		a (list[float]): First vector.
+		b (list[float]): Second vector.
+
+	Returns:
+		float: Similarity in 0..1, decreasing with distance.
+
+	Example:
+		>>> l2([1.0, 0.0], [1.0, 0.0])
+		1.0
+		>>> l2([1.0, 0.0], [3.0, 0.0]) < l2([1.0, 0.0], [0.9, 0.0])
+		True
+	"""
+	if not a or not b or len(a) != len(b):
+		return 0.0
+
+	distance = math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
+	return 1.0 / (1.0 + distance)
+
+
+# The three comparisons spec §3.7 allows a store to declare. A store picks one
+# and reports it, because the metric belongs to its index rather than to a
+# query -- and because a caller whose vectors were trained against a different
+# one gets silently wrong ranking that nothing can detect for it.
+METRICS = {"cosine": cosine, "dot": dot, "l2": l2}
+
+
 def idf(document_frequency: int, total: int) -> float:
 	"""Inverse document frequency, smoothed.
 
@@ -326,7 +398,7 @@ class EmbeddingScorer(Scorer):
 	write. Writes happen on every single message; recalls are rarer and can
 	amortise the whole backlog into a single call."""
 
-	def __init__(self, embed: Callable, threshold: float = 0.0) -> None:
+	def __init__(self, embed: Callable, threshold: float = 0.0, metric: str = "cosine") -> None:
 		"""Configure similarity ranking over embeddings.
 
 		Args:
@@ -334,9 +406,23 @@ class EmbeddingScorer(Scorer):
 				order. Batched, because recall embeds the whole backlog at once.
 			threshold (float, optional): Similarities at or below this are dropped
 				rather than returned with a low score.
+			metric (str, optional): How two vectors are compared -- `cosine`,
+				`dot` or `l2`. Whatever is chosen here is what the server must
+				report from `describe`, because a caller supplying its own
+				vectors has no other way to find out and no way to detect a
+				mismatch (spec §3.7).
+
+		Raises:
+			ValueError: If the metric is not one of the three the specification
+				allows a store to declare.
 		"""
+		if metric not in METRICS:
+			raise ValueError(f"Unknown metric '{metric}'; expected one of {', '.join(sorted(METRICS))}")
+
 		self.embed     = embed
 		self.threshold = float(threshold)
+		self.metric    = metric
+		self.compare   = METRICS[metric]
 		self.vectors   : dict[str, list[float]] = {}
 
 
@@ -403,7 +489,7 @@ class EmbeddingScorer(Scorer):
 			if not known:
 				continue
 
-			similarity = cosine(vector, known)
+			similarity = self.compare(vector, known)
 			if similarity > self.threshold:
 				scores[record.id] = min(max(similarity, 0.0), 1.0)
 
@@ -417,7 +503,8 @@ class EmbeddingScorer(Scorer):
 			dict: The strategy, its similarity threshold, and how many vectors are
 			currently cached.
 		"""
-		return {"scorer": "embedding", "threshold": self.threshold, "vectors": len(self.vectors)}
+		return {"scorer": "embedding", "metric": self.metric,
+		        "threshold": self.threshold, "vectors": len(self.vectors)}
 
 
 class HybridScorer(Scorer):
@@ -449,6 +536,26 @@ class HybridScorer(Scorer):
 
 		if not self.scorers:
 			raise ValueError("HybridScorer needs at least one scorer")
+
+
+	@property
+	def metric(self) -> str | None:
+		"""How this hybrid compares vectors, if any component compares vectors.
+
+		A server reports its metric from whatever its scorer says, so a hybrid
+		has to pass the question through to the component that actually holds
+		an opinion. Without this a hybrid store would report the default rather
+		than the truth.
+
+		Returns:
+			str | None: The metric of the first component that has one, or None
+			for a hybrid of scorers that never touch a vector.
+		"""
+		for scorer, _ in self.scorers:
+			metric = getattr(scorer, "metric", None)
+			if metric:
+				return metric
+		return None
 
 
 	def index(self, record: Any) -> None:
@@ -568,19 +675,35 @@ def ollama_embedder(model: str = EMBEDDING_MODEL, **kwargs) -> Callable:
 	return embed_fn
 
 
-def make_scorer(kind: str = "lexical", embed: Callable = None, weights: tuple = (0.4, 0.6), **kwargs) -> Scorer:
-	"""Pick a scorer by name, so a stack can be configured from data."""
+def make_scorer(kind: str = "lexical", embed: Callable = None, weights: tuple = (0.4, 0.6),
+                metric: str = "cosine", **kwargs) -> Scorer:
+	"""Pick a scorer by name, so a stack can be configured from data.
+
+	Args:
+		kind (str): lexical, embedding or hybrid.
+		embed (Callable, optional): The embedder, for the two that need one.
+		weights (tuple, optional): Lexical and embedding weights, for hybrid.
+		metric (str, optional): cosine, dot or l2. Ignored by `lexical`, which
+			never compares vectors.
+		**kwargs: Passed to the scorer.
+
+	Returns:
+		Scorer: Configured.
+
+	Raises:
+		ValueError: On an unknown scorer or metric.
+	"""
 	if kind == "lexical":
 		return LexicalScorer(**kwargs)
 
 	if kind == "embedding":
-		return EmbeddingScorer(embed or ollama_embedder(), **kwargs)
+		return EmbeddingScorer(embed or ollama_embedder(), metric=metric, **kwargs)
 
 	if kind == "hybrid":
 		lexical, embedding = weights
 		return HybridScorer([
-			(LexicalScorer()                              , lexical  ),
-			(EmbeddingScorer(embed or ollama_embedder()) , embedding),
+			(LexicalScorer()                                              , lexical  ),
+			(EmbeddingScorer(embed or ollama_embedder(), metric=metric)  , embedding),
 		])
 
 	raise ValueError(f"Unknown scorer '{kind}'; expected lexical, embedding or hybrid")

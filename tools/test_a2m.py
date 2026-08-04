@@ -24,7 +24,7 @@ from   typing        import Any, Callable
 from   a2m           import MemoryServer, connect_http, connect_local, connect_stdio, serve_a2m_http
 from   a2m.jsonrpc   import Client, Dispatcher, JsonRpcError, LocalTransport
 from   a2m.memory    import MemoryStack, MemoryTier, from_rfc3339, to_rfc3339
-from   a2m.retrieval import EmbeddingScorer, HybridScorer, LexicalScorer, cosine, llm_consolidator, make_scorer
+from   a2m.retrieval import METRICS, EmbeddingScorer, HybridScorer, LexicalScorer, cosine, llm_consolidator, make_scorer
 from   a2m.text      import detect, tokenize
 
 
@@ -289,7 +289,37 @@ def test_scorers() -> None:
 	      HybridScorer([LexicalScorer()]).relevance("", [balcony]) is None)
 
 	check("scorers are selectable by name", type(make_scorer("lexical")).__name__ == "LexicalScorer")
-	check("the stack reports which scorer it uses", MemoryStack().describe()["scorer"]["scorer"] == "lexical")
+	check("the stack reports which scorer it uses", MemoryStack().describe()["scorer"]["scorer"] == "hybrid")
+	# A store declaring `embeddings` must actually compare them. The default was
+	# purely lexical until a conformance check caught it ranking by recency
+	# while `describe` reported a cosine metric.
+	stack = MemoryStack()
+	near, far = [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]
+	stack.remember("probe near", tier="semantic", embedding=near)
+	stack.remember("probe far",  tier="semantic", embedding=far)
+	ranked = [r.content for r, _ in stack.recall(None, embedding=near, limit=1)]
+	check("a caller's query vector actually ranks", ranked == ["probe near"], ranked)
+	# Each metric ranks the same three vectors differently, which is the whole
+	# reason a store has to declare which it uses. Along one axis: A is near and
+	# short, B is far and long, C is off-axis. Cosine ignores length, dot rewards
+	# it, l2 punishes it.
+	query, A, B, C = [1.0, 0.0], [0.9, 0.0], [3.0, 0.0], [0.5, 0.5]
+	orders = {}
+	for metric in ("cosine", "dot", "l2"):
+		scorer = EmbeddingScorer(None, metric=metric)
+		check(f"'{metric}' is the metric it reports", scorer.metric == metric)
+		scored = {name: METRICS[metric](query, vector)
+		          for name, vector in (("A", A), ("B", B), ("C", C))}
+		orders[metric] = sorted(scored, key=lambda name: -scored[name])
+
+	check("cosine ignores length: the long vector still beats the off-axis one",
+	      orders["cosine"].index("B") < orders["cosine"].index("C"), orders["cosine"])
+	check("dot rewards length: the long vector wins outright",
+	      orders["dot"][0] == "B", orders["dot"])
+	check("l2 punishes length: the long vector loses even to the off-axis one",
+	      orders["l2"].index("C") < orders["l2"].index("B"), orders["l2"])
+	check("so the three metrics are genuinely distinguishable",
+	      len({tuple(o) for o in orders.values()}) == 3, orders)
 
 	try:
 		make_scorer("telepathy")

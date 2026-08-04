@@ -575,6 +575,77 @@ def test_embeddings(client: Client, report: Report, profile: dict[str, Any]) -> 
 	                 {"content": "wrong width", "embedding": [1.0] * (len(near) + 3)}]}))
 
 	client.call("memory/forget", {"ids": ids})
+	test_metric(client, report, contract, width)
+
+
+def test_metric(client: Client, report: Report, contract: dict[str, Any], width: int) -> None:
+	"""Check that the declared metric is the metric actually used (spec §3.7).
+
+	`metric` is the one thing a caller supplying vectors cannot verify for
+	itself and the server cannot detect a mismatch in: a vector from a model
+	trained against a different comparison is ranked with complete confidence
+	and no warning. So a server declaring one and using another is undetectable
+	in production, which makes it exactly the kind of claim worth checking here.
+
+	Three vectors along one axis separate the three metrics, because they
+	disagree about **magnitude**:
+
+		A = 0.9x   near, same direction
+		B = 3.0x   far, same direction
+		C = 0.5x + 0.5y   near-ish, different direction
+
+	`cosine` ignores length, so A and B tie at the top and C is last. `dot`
+	rewards length, so B wins. `l2` punishes it, so B loses even to C. Each
+	declared metric therefore implies an ordering the other two contradict.
+
+	Args:
+		client (Client): Connected to the server under test.
+		report (Report): Where to record results.
+		contract (dict): The server's embedding profile.
+		width (int): The store's vector width.
+	"""
+	metric = (contract or {}).get("metric")
+	if metric not in ("cosine", "dot", "l2") or width < 2:
+		report.skip("declared metric matches observed ranking", f"metric {metric!r}, width {width}")
+		return
+
+	def vector(x: float, y: float) -> list[float]:
+		return [x, y] + [0.0] * (width - 2)
+
+	marker = uuid.uuid4().hex
+
+	# One call, so recency and salience are equal and the metric is what
+	# separates them.
+	client.call("memory/remember", {"records": [
+		{"content": f"metric probe A {marker}", "embedding": vector(0.9, 0.0)},
+		{"content": f"metric probe B {marker}", "embedding": vector(3.0, 0.0)},
+		{"content": f"metric probe C {marker}", "embedding": vector(0.5, 0.5)},
+	]})
+
+	found = client.call("memory/recall", {"embedding": vector(1.0, 0.0), "limit": 10}).get("records", [])
+	order = [r.get("content", "").split()[2] for r in found
+	         if marker in r.get("content", "") and len(r.get("content", "").split()) > 2]
+
+	def rank(name: str) -> int:
+		return order.index(name) if name in order else 99
+
+	if len(order) < 3:
+		report.skip("declared metric matches observed ranking",
+		            f"the store returned {len(order)} of 3 probes")
+	elif metric == "cosine":
+		# Length is ignored, so the far vector still beats the off-axis one.
+		report.check("declared 'cosine' ranks by direction, ignoring length",
+		             rank("B") < rank("C"), order)
+	elif metric == "dot":
+		# Length is rewarded: the long vector outranks the short one beside it.
+		report.check("declared 'dot' ranks the longer vector higher",
+		             rank("B") < rank("A"), order)
+	else:
+		# Length is punished: distance puts the long vector below the off-axis one.
+		report.check("declared 'l2' ranks the more distant vector lower",
+		             rank("C") < rank("B"), order)
+
+	client.call("memory/forget", {"query": f"metric probe {marker}"})
 
 
 def test_external(client: Client, report: Report, profile: dict[str, Any]) -> None:
