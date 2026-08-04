@@ -252,6 +252,59 @@ def main() -> int:
 	check("consolidation cannot displace an unbounded corpus tier",
 	      len(memory.timeline(tier="corpus")) == before, before)
 
+	print("\n5. a corpus is not only text")
+
+	# A2M carries an image, a recording or a model with no field for any of
+	# them: `uri` is the thing, `media_type` says what it is, and `content` is
+	# whatever representation makes it findable -- a caption, a transcript, a
+	# description. Producing that representation is the caller's job; the
+	# protocol only requires that something ranked ends up in `content`.
+	memory = connect_local(MemoryStack())
+
+	media = [
+		("diagram.png",  "image/png",        "architecture diagram: the router sits between the agent and four tier backends"),
+		("standup.m4a",  "audio/mp4",        "standup recording: the vault outage is resolved and deploys resume on monday"),
+		("demo.mp4",     "video/mp4",        "screencast: rotating the deploy key end to end, including the vault update step"),
+		("chassis.gltf", "model/gltf+json",  "chassis model: mounting bracket revision C, four M3 holes on a 40mm pitch"),
+	]
+
+	for name, media_type, described in media:
+		memory.remember(
+			described,                          # what gets indexed
+			tier       = "semantic",
+			key        = f"media/{name}",
+			uri        = f"file:///corpus/media/{name}",
+			media_type = media_type,            # what is actually at the other end
+			metadata   = {"asset": name},
+		)
+
+	found = memory.recall(query="how do I rotate the deploy key", limit=1)
+	check("a video is recalled by what it is about",
+	      found and found[0]["media_type"] == "video/mp4", found)
+	check("and the record points at it rather than containing it",
+	      found and found[0]["uri"] == "file:///corpus/media/demo.mp4", found)
+
+	drawing = memory.recall(query="which component sits between the agent and the backends", limit=1)
+	check("an image is found through its caption",
+	      drawing and drawing[0]["media_type"] == "image/png", drawing)
+
+	# The bytes are never in the record, and the server never goes to get them.
+	check("no record carries the asset itself",
+	      all(len(r["content"]) < 200 for r in memory.timeline(key_prefix="media/")),
+	      [len(r["content"]) for r in memory.timeline(key_prefix="media/")])
+
+	# A multimodal vector reaches a picture with no caption at all: the record
+	# is ranked on the vector, and `content` can be empty (spec §3.8.1).
+	picture = [0.0, 1.0, 0.0, 0.0]
+	memory.remember("", tier="semantic", key="media/uncaptioned.png",
+	                uri="file:///corpus/media/uncaptioned.png",
+	                media_type="image/png", embedding=picture)
+	by_vector = memory.recall(embedding=picture, limit=1)
+	check("an uncaptioned image is still reachable by vector",
+	      by_vector and by_vector[0]["key"] == "media/uncaptioned.png", by_vector)
+	print("       ^ same three fields for every medium. A2M has no image type,")
+	print("         no audio type and no blob field, and needs none.")
+
 	print("\n   third way, not run here: federate it (implementing-a2m.md §9.4).")
 	print("   Wrap the existing RAG stack as an A2M server and mount it as a tier in")
 	print("   the router. The corpus keeps its own pipeline, database and release")

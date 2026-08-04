@@ -230,13 +230,13 @@ them:
 
 | | storage | declares | conformance |
 |---|---|---|---|
-| `python -m a2m` | a dict in memory | everything | 121/121 |
+| `python -m a2m` | a dict in memory | everything | 123/123 |
 | [server_minimal.py](implementations/server_minimal.py) | a dict, stdlib only | `core` only | 37/37 |
 | [server_minimal.ts](implementations/server_minimal.ts) | a Map, **TypeScript** | `core` + `keys` | 47/47 |
 | [server_readonly.py](implementations/server_readonly.py) | a fixed corpus, **read-only** | `core` only | 32/32 |
-| [store_sqlite.py](implementations/store_sqlite.py) | SQLite + sqlite-vec | everything | 121/121 |
-| [store_postgres.py](implementations/store_postgres.py) | **PostgreSQL + pgvector** | everything | 121/121 |
-| [server_federated.py](implementations/server_federated.py) | four A2M servers | all but `summarize` | 96/96 |
+| [store_sqlite.py](implementations/store_sqlite.py) | SQLite + sqlite-vec | everything | 123/123 |
+| [store_postgres.py](implementations/store_postgres.py) | **PostgreSQL + pgvector** | everything | 123/123 |
+| [server_federated.py](implementations/server_federated.py) | four A2M servers | all but `summarize` | 98/98 |
 
 Checks are grouped by capability and skipped when a server does not declare one.
 Declaring a capability and then not honouring it *is* a failure — a client

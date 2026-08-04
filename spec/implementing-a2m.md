@@ -365,6 +365,7 @@ deliberately declines the other two:
 | | who owns it | what A2M provides |
 |---|---|---|
 | **chunker** | the ingester, entirely | nothing — but `group` keeps a document's chunks together through eviction (§3.4) |
+| **the thing itself** | wherever it already lives | `uri` + `media_type` point at it and the server never fetches it (§3.8). An image, a recording or a model is the same record shape as a paragraph — only what goes in `content` changes |
 | **embedder** | the caller, or the server | a vector is stored **verbatim** and never regenerated (§3.7); `describe` names the model |
 | **comparer** | the server's index | `describe` names the `metric`; it is declared, not selected, and a mismatch is invisible |
 
