@@ -314,6 +314,110 @@ def build(memory: MemoryClient, tier: str) -> tuple[dict, list[str]]:
 	return built, missing
 
 
+def test_non_searching(memory: MemoryClient, tier: str) -> None:
+	"""The adapters that share the store without searching it.
+
+	Not every framework interface is a search. LangChain's `BaseStore` reads by
+	key and AutoGen's `ChatCompletionContext` replays by session, so neither
+	belongs in a grid asking "can you find what the others wrote by content".
+	Leaving them out entirely would be worse -- they are real adapters and can
+	break -- so they are checked on the question they *do* answer: does what
+	they write land in the same store, visible to everyone else.
+
+	Args:
+		memory (MemoryClient): The shared A2M client.
+		tier (str): Where standalone facts belong.
+	"""
+	print("\n  sharing without searching")
+
+	try:
+		from implementations.adapters.langchain import A2MStore
+	except Exception as exc:
+		print(f"      skip: langchain store ({type(exc).__name__})")
+	else:
+		store = A2MStore(memory, namespace="interop/store", tier=tier)
+		store.mset([("handbook", b"the interop store holds the escalation policy")])
+
+		check("a key-value store round-trips", store.mget(["handbook"])[0] ==
+		      b"the interop store holds the escalation policy", store.mget(["handbook"]))
+		check("an unused key is None, not an error", store.mget(["nothing"])[0] is None)
+		check("its keys are enumerable", list(store.yield_keys()) == ["handbook"], list(store.yield_keys()))
+
+		# The point of the row: a value written through LangChain's cache
+		# interface is an ordinary record everyone else can recall.
+		found = memory.recall(query="escalation policy", limit=5)
+		check("and what it wrote is visible to a plain recall",
+		      any("escalation policy" in r["content"] for r in found), found)
+		store.mdelete(["handbook"])
+
+	try:
+		import asyncio
+
+		from autogen_core.models             import AssistantMessage, UserMessage
+		from implementations.adapters.autogen import A2MChatCompletionContext
+	except Exception as exc:
+		print(f"      skip: autogen model context ({type(exc).__name__})")
+		return
+
+	context = A2MChatCompletionContext(memory, session="interop-chat")
+
+	async def exercise():
+		await context.add_message(UserMessage(content="who owns the scheduler?", source="user"))
+		await context.add_message(AssistantMessage(content="the platform team owns it", source="ops"))
+		return await context.get_messages()
+
+	replayed = asyncio.run(exercise())
+	check("a model context replays in order",
+	      [str(m.content) for m in replayed] ==
+	      ["who owns the scheduler?", "the platform team owns it"], replayed)
+	check("and it replays rather than ranks",
+	      type(replayed[0]).__name__ == "UserMessage", replayed)
+
+	# The transcript is in the store, not in the context object -- which is the
+	# whole difference between persisting and sharing.
+	turns = memory.timeline(where={"session": "interop-chat"})
+	check("the transcript is in the shared store", len(turns) == 2, turns)
+
+	asyncio.run(context.clear())
+
+
+def test_server_side_embedding() -> None:
+	"""The answer to the n/a cells: let the server embed what arrives without a vector.
+
+	CrewAI reads by vector and cannot see a text-only record. That is its
+	interface, and no adapter can bridge it -- but a *store* can, and spec §3.7
+	already allows it: "A server MAY additionally generate embeddings for
+	records that arrive without one."
+
+	So the limitation is a deployment choice rather than a protocol one, and
+	this proves it: the same text-only write becomes vector-searchable once the
+	store has an embedder, with nothing in either adapter changing.
+	"""
+	print("\n  server-side embedding closes the vector-only gap")
+
+	from a2m.retrieval import EmbeddingScorer
+
+	# Stands in for a real embedder. Deterministic, offline, two axes.
+	def embed(texts: list[str]) -> list[list[float]]:
+		return [[float("vault" in text), float("branch" in text)] for text in texts]
+
+	for described, scorer, expected in (
+		("without an embedder", EmbeddingScorer(None) , False),
+		("with an embedder"   , EmbeddingScorer(embed), True ),
+	):
+		stack  = MemoryStack(scorer=scorer)
+		server = MemoryServer(stack=stack, name="embedding-probe")
+		client = MemoryClient(Client(LocalTransport(server.dispatcher)))
+
+		# Written as text only, exactly as every non-CrewAI adapter writes.
+		client.remember("the vault token expires each quarter", tier=searchable(client))
+
+		found = client.recall(embedding=[1.0, 0.0], limit=1)
+		check(f"a text-only record is vector-searchable {described}: {expected}",
+		      bool(found) == expected, found)
+		client.close()
+
+
 def main() -> int:
 	"""Write through every adapter, read through every adapter, print the grid.
 
@@ -391,6 +495,9 @@ def main() -> int:
 
 	for note in dict.fromkeys(notes):
 		print(f"  n/a   {note}")
+
+	test_non_searching(memory, tier)
+	test_server_side_embedding()
 
 	memory.close()
 

@@ -282,7 +282,7 @@ the other.
 | [implementations/store_postgres.py](implementations/store_postgres.py) | the same logic on PostgreSQL and pgvector |
 | [implementations/server_federated.py](implementations/server_federated.py) | one A2M server per tier, one router in front |
 | [implementations/bridge_mcp.py](implementations/bridge_mcp.py) | any A2M server as an MCP tool server, stdlib only |
-| [implementations/adapters/](implementations/adapters/) | LangChain, Agno, CrewAI and AutoGen, talking to an A2M server unmodified |
+| [implementations/adapters/](implementations/adapters/) | LangChain, Agno, CrewAI and AutoGen — every storage interface each one exposes |
 | [tools/conformance.py](tools/conformance.py) | conformance suite for **any** A2M server |
 | [tools/test_a2m.py](tools/test_a2m.py) | `python -m tools.test_a2m` — no test runner, no network |
 | [tools/bench_embeddings.py](tools/bench_embeddings.py) | which embedding model backs recall, measured |

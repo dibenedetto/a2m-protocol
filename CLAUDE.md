@@ -35,11 +35,11 @@ implementations/store_sqlite.py      that logic on SQLite, one TierStore per tie
 implementations/store_postgres.py    the same on PostgreSQL + pgvector. Optional dep.
 implementations/server_federated.py  one A2M server per tier, one router in front
 implementations/bridge_mcp.py        any A2M server as an MCP tool server. Stdlib only.
-implementations/adapters/langchain.py  LangChain chat history + retriever. Optional dep.
+implementations/adapters/langchain.py  LangChain history + retriever + BaseStore. Optional dep.
 implementations/adapters/agno.py       Agno VectorDb (knowledge). Optional dep.
 implementations/adapters/agno_db.py    Agno BaseDb (user memories). Optional dep.
 implementations/adapters/crewai.py     CrewAI StorageBackend. Optional dep, needs Python <= 3.13.
-implementations/adapters/autogen.py    AutoGen Memory protocol. Optional dep.
+implementations/adapters/autogen.py    AutoGen Memory + ChatCompletionContext. Optional dep.
 
 tools/conformance.py       conformance suite. Speaks only the protocol.
 tools/test_a2m.py          implementation tests

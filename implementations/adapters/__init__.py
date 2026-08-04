@@ -5,11 +5,11 @@ depends on it. Each module imports one framework, and importing this package
 imports none of them — so a checkout with no framework installed still runs
 every test, every conformance target and both demos.
 
-	adapters.langchain   LangChain chat history and retriever
+	adapters.langchain   LangChain chat history, retriever and key-value store
 	adapters.agno        Agno vector database (the knowledge base)
 	adapters.agno_db     Agno BaseDb (user memories) -- the other half Agno persists
 	adapters.crewai      CrewAI memory storage
-	adapters.autogen     AutoGen memory protocol
+	adapters.autogen     AutoGen memory protocol and model context
 
 The point they make together is the one A2M exists for: two frameworks with
 incompatible memory models, pointed at one store, reading each other's records.

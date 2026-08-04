@@ -29,17 +29,19 @@ than LangChain ones:
 """
 
 
+import base64
 import json
 import uuid
 
 
-from   typing import Any, Iterable, List, Sequence
+from   typing import Any, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 
 from   langchain_core.chat_history import BaseChatMessageHistory
 from   langchain_core.documents    import Document
 from   langchain_core.messages     import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from   langchain_core.retrievers   import BaseRetriever
+from   langchain_core.stores       import BaseStore
 from   pydantic                    import ConfigDict
 
 
@@ -321,3 +323,172 @@ class A2MRetriever(BaseRetriever):
 			)
 			for record in records
 		]
+
+
+class A2MStore(BaseStore[str, bytes]):
+	"""LangChain's key-value store, addressed by A2M keys.
+
+	`BaseStore` is the interface behind `CacheBackedEmbeddings`, document
+	caches and anything else LangChain wants to put somewhere by name. Its four
+	methods are almost exactly the `keys` capability (spec §3.6):
+
+		mset        remember, with a key -- an occupied one is replaced
+		mget        fetch, which returns None for an unused key rather than raising
+		mdelete     forget
+		yield_keys  timeline over a key prefix
+
+	Which is why this file is short. The one design choice is what to do with a
+	value that is not text.
+
+	**Values are stored as text when they are text.** LangChain's `ByteStore`
+	deals in bytes, and bytes that decode as UTF-8 are written as `content`
+	unchanged -- so a cached document stays readable and, incidentally,
+	recallable by anything else sharing the store. Bytes that do not decode are
+	base64-encoded and marked in metadata, because a memory protocol should not
+	silently corrupt a value it was handed.
+
+	A base64 blob is addressable and not meaningfully searchable, and that is
+	the honest outcome: an embedding cache is not a memory, it merely lives in
+	the same store.
+	"""
+
+	def __init__(self, client, namespace: str = "langchain/store", tier: str = None) -> None:
+		"""Point a LangChain key-value store at an A2M server.
+
+		Args:
+			client: A negotiated A2M client.
+			namespace (str, optional): Prefixed onto every key, so a cache and a
+				corpus can share a store without colliding.
+			tier (str, optional): Where values live. The first searchable tier
+				by default.
+
+		Raises:
+			ValueError: If the server does not declare `keys`, which this whole
+				interface is.
+		"""
+		if not client.supports("keys"):
+			raise ValueError(
+				"A2MStore needs the 'keys' capability: it is a key-value store, and "
+				"without addressable records mset would append rather than replace"
+			)
+
+		self.client    = client
+		self.namespace = namespace.strip("/")
+		self.tier      = tier if tier is not None else self._searchable_tier()
+
+
+	def _searchable_tier(self) -> Optional[str]:
+		"""The first tier a read can reach.
+
+		Returns:
+			str | None: A tier name, or None on a server without tiers.
+		"""
+		if not self.client.supports("tiers"):
+			return None
+
+		for tier in self.client.describe().get("tiers", []):
+			if tier.get("kind") != "working":
+				return tier.get("name")
+		return None
+
+
+	def _key(self, key: str) -> str:
+		"""The A2M address of one stored value.
+
+		Args:
+			key (str): LangChain's key.
+
+		Returns:
+			str: `<namespace>/<key>`.
+		"""
+		return f"{self.namespace}/{key}"
+
+
+	def mset(self, key_value_pairs: Sequence[Tuple[str, bytes]]) -> None:
+		"""Store values by key, replacing whatever was there.
+
+		Args:
+			key_value_pairs (Sequence[tuple]): Keys and their values.
+		"""
+		for key, value in key_value_pairs:
+			raw     = value if isinstance(value, (bytes, bytearray)) else str(value).encode("utf-8")
+			encoded = False
+
+			try:
+				content = bytes(raw).decode("utf-8")
+			except UnicodeDecodeError:
+				content = base64.b64encode(bytes(raw)).decode("ascii")
+				encoded = True
+
+			fields = {"key": self._key(key), "role": "system",
+			          "metadata": {"base64": encoded, "store": self.namespace}}
+			if self.tier is not None:
+				fields["tier"] = self.tier
+
+			self.client.remember(content, **fields)
+
+
+	def mget(self, keys: Sequence[str]) -> List[Optional[bytes]]:
+		"""Read values by key.
+
+		Args:
+			keys (Sequence[str]): Keys to read.
+
+		Returns:
+			list[bytes | None]: One entry per key, in order. None where the key
+			holds nothing -- which spec §4.9 makes an ordinary answer rather
+			than an error, and is exactly what BaseStore expects.
+		"""
+		values: List[Optional[bytes]] = []
+
+		for key in keys:
+			record = self.client.fetch(self._key(key))
+			if record is None:
+				values.append(None)
+				continue
+
+			content = record.get("content", "")
+			if (record.get("metadata") or {}).get("base64"):
+				values.append(base64.b64decode(content))
+			else:
+				values.append(content.encode("utf-8"))
+
+		return values
+
+
+	def mdelete(self, keys: Sequence[str]) -> None:
+		"""Delete values by key.
+
+		Deletes by id rather than by key prefix, because a prefix would also
+		match every longer key beneath it -- `mdelete(["a"])` must not remove
+		`a/b`.
+
+		Args:
+			keys (Sequence[str]): Keys to delete.
+		"""
+		doomed = []
+		for key in keys:
+			record = self.client.fetch(self._key(key))
+			if record is not None:
+				doomed.append(record["id"])
+
+		if doomed:
+			self.client.forget(ids=doomed)
+
+
+	def yield_keys(self, *, prefix: Optional[str] = None) -> Iterator[str]:
+		"""Every key this store holds, optionally under a prefix.
+
+		Args:
+			prefix (str, optional): A LangChain-level key prefix.
+
+		Yields:
+			str: Keys, with the namespace stripped back off.
+		"""
+		under = f"{self.namespace}/{prefix}" if prefix else f"{self.namespace}/"
+		start = len(self.namespace) + 1
+
+		for record in self.client.timeline(limit=0, key_prefix=under):
+			key = record.get("key") or ""
+			if key:
+				yield key[start:]
