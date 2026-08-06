@@ -25,3 +25,8 @@ demo-memories/
 # Rendered site. Built by www/render.py and published by the pages workflow;
 # committing it would let a published page drift from the Markdown it came from.
 www/public/
+
+# Internal working state, deliberately not part of the published protocol:
+# session handoff notes and launch material. Kept on disk, out of the repo.
+HANDOFF.md
+promotion/
