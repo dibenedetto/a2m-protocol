@@ -55,6 +55,14 @@ langchain = ["langchain-core>=0.3"]
 agno      = ["agno>=2.0"]
 crewai    = ["crewai>=0.100"]
 autogen   = ["autogen-core>=0.4"]
+# The OpenAI Agents SDK adapter is the exception: its `Session` is a structural
+# Protocol, so implementations/adapters/openai_agents.py imports nothing at all
+# and works without this installed. The extra is here for the suites and the
+# example, which do need the SDK to check that the adapter really satisfies it.
+openai    = ["openai-agents>=0.1"]
+# examples/agent_interop.py builds a real agent from each framework, and two of
+# them keep their agent classes outside the core package the adapter imports.
+agents    = ["openai-agents>=0.1", "agno>=2.0", "autogen-agentchat>=0.4", "autogen-ext>=0.4"]
 
 [project.urls]
 Homepage      = "https://a2m-protocol.org"

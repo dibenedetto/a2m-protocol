@@ -92,8 +92,30 @@ every transport (DECISION 026).
 - A federated topology: one A2M server per tier behind a router that reaches
   its backends over the protocol.
 - `bridge_mcp.py`, exposing any A2M server as an MCP tool server.
-- Adapters for LangChain, Agno, CrewAI and AutoGen; an importable n8n workflow.
+- Adapters for LangChain, Agno, CrewAI, AutoGen and the OpenAI Agents SDK; an
+  importable n8n workflow, named `<Framework>A2M<WhatItImplements>` —
+  `AgnoA2MVectorDb`, `LangChainA2MRetriever`, `OpenAIAgentsA2MSession`. The
+  framework leads because the second half is not distinctive: five of them
+  implement something called a store, a memory or a session. The OpenAI one
+  imports nothing: the SDK declares `Session` as a structural `Protocol`, so
+  having the four methods is being a session.
+- `LangChainA2MRetriever` takes an embedder, so LangChain retrieval can rank by
+  vector in the caller's own space rather than by text only. `cross_framework.py`
+  now checks the whole crossing: Agno writes a document with its vector, LangChain
+  searches with the same embedder and finds it first, a query sharing no word
+  with the document finds nothing without one, and the vector the store returns
+  is the one Agno computed. Given an embedder on a server that never declared
+  `embeddings`, the retriever refuses at construction instead of silently
+  ranking by text.
 - A cross-framework interop matrix: every adapter writes, every adapter reads,
   and the grid must be complete. Its first run found the CrewAI adapter could
   only read what it had written itself.
+- Interoperability checked a second time, one level up, at the agent rather than
+  the store: `examples/agent_interop.py` runs an OpenAI Agents SDK agent, an Agno
+  agent and an AutoGen agent against one server and asserts that each one's fact
+  reached the *others' model calls*. Each agent runs on a scripted model that
+  records what it was handed, so it is offline, free and deterministic. It found
+  the same namespace bug a third time: `AutoGenA2MMemory` scoped reads to its own
+  namespace, and its `clear` with no namespace deleted every record that had
+  none — including other frameworks'.
 - Packaging as `a2m-protocol`, standard library only, Python 3.10+.

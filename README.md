@@ -84,6 +84,15 @@ LangChain agent     Agno agent      n8n node        CrewAI crew
   ✓ Shared state   ✓ Persistent across runs   ✓ Ranked recall, model optional
 ```
 
+That diagram is a claim, so it is also a test.
+[examples/agent_interop.py](examples/agent_interop.py) builds three real agents —
+an OpenAI Agents SDK `Agent`, an Agno `Agent`, an AutoGen `AssistantAgent` —
+gives each one its own framework's memory object pointed at the same server, and
+then asks the only question that matters at that level: *did the other
+framework's fact reach this agent's model call?* Each agent runs on a scripted
+model that records what it was handed, so the answer is checked rather than
+asserted, and the whole thing runs offline with no API key.
+
 ---
 
 ## A2M and MCP
@@ -282,11 +291,11 @@ the other.
 | [implementations/store_postgres.py](implementations/store_postgres.py) | the same logic on PostgreSQL and pgvector |
 | [implementations/server_federated.py](implementations/server_federated.py) | one A2M server per tier, one router in front |
 | [implementations/bridge_mcp.py](implementations/bridge_mcp.py) | any A2M server as an MCP tool server, stdlib only |
-| [implementations/adapters/](implementations/adapters/) | LangChain, Agno, CrewAI and AutoGen — every storage interface each one exposes |
+| [implementations/adapters/](implementations/adapters/) | LangChain, Agno, CrewAI, AutoGen and the OpenAI Agents SDK — every storage interface each one exposes |
 | [tools/conformance.py](tools/conformance.py) | conformance suite for **any** A2M server |
 | [tools/test_a2m.py](tools/test_a2m.py) | `python -m tools.test_a2m` — no test runner, no network |
 | [tools/bench_embeddings.py](tools/bench_embeddings.py) | which embedding model backs recall, measured |
-| [examples/](examples/) | [cross-framework](examples/cross_framework.py) · [embedders](examples/embedders.py) · [corpus ingestion](examples/rag_ingest.py) · [procedural memory](examples/procedural.py) · [LLM wiki](examples/llm_wiki.py) · [n8n](examples/n8n_workflow.json) |
+| [examples/](examples/) | [agent interop](examples/agent_interop.py) · [cross-framework](examples/cross_framework.py) · [embedders](examples/embedders.py) · [corpus ingestion](examples/rag_ingest.py) · [procedural memory](examples/procedural.py) · [LLM wiki](examples/llm_wiki.py) · [n8n](examples/n8n_workflow.json) |
 | [DECISIONS.md](DECISIONS.md) | why the non-obvious choices are what they are |
 
 Three directories, and the split is the argument. `a2m/` is the library an

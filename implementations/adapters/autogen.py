@@ -2,14 +2,14 @@
 
 	pip install autogen-core
 
-`A2MMemory` implements `autogen_core.memory.Memory`, so an AutoGen agent's
+`AutoGenA2MMemory` implements `autogen_core.memory.Memory`, so an AutoGen agent's
 memory — the thing `update_context` injects before each model call — is an A2M
 store, shared with whatever else is connected to it:
 
 	from autogen_agentchat.agents import AssistantAgent
 
 	agent = AssistantAgent(name="ops", model_client=model,
-	                       memory=[A2MMemory(client, namespace="ops")])
+	                       memory=[AutoGenA2MMemory(client, namespace="ops")])
 
 The mapping is close because the shapes agree: AutoGen's `add` is
 `memory/remember`, its `query` is `memory/recall`, and `update_context` is a
@@ -45,14 +45,14 @@ from   autogen_core.model_context import ChatCompletionContext
 from   autogen_core.models import SystemMessage
 
 
-class A2MMemory(Memory):
+class AutoGenA2MMemory(Memory):
 	"""AutoGen memory backed by an A2M server.
 
 	Example:
 		from implementations import client as a2m_client
 
 		client = a2m_client.connect_stdio(["python", "-m", "implementations.store_sqlite", "memory.db"])
-		memory = A2MMemory(client, namespace="ops")
+		memory = AutoGenA2MMemory(client, namespace="ops")
 
 		await memory.add(MemoryContent(content="the deploy key rotates every ninety days",
 		                               mime_type=MemoryMimeType.TEXT))
@@ -67,9 +67,18 @@ class A2MMemory(Memory):
 		Args:
 			client: A negotiated A2M client — implementations.client.A2MClient
 				or a2m.MemoryClient, over any transport.
-			namespace (str, optional): Stamped into every record's metadata;
-				scopes `clear` so two agents on one store cannot wipe each
-				other.
+			namespace (str, optional): Stamped into every record's metadata,
+				and the scope of both `query` and `clear`, so two agents on one
+				store cannot read past or wipe each other.
+
+				**Pass None to search the whole store.** A namespace is
+				isolation, and isolation is exactly what the case A2M exists
+				for does not want: an agent that can only recall what it wrote
+				is a private store again, whatever it is sitting on top of.
+				With None this memory still stamps its writes but ranks
+				everything, including records another framework put there. The
+				trade is that `clear` then has no scope, and refuses --- see
+				below.
 			tier (str, optional): Where writes land. Defaults to the first
 				searchable tier the server describes, because these memories
 				are recalled and the working tier is replayed (spec §4.4).
@@ -114,7 +123,12 @@ class A2MMemory(Memory):
 			metadata for the caller that wants it — it orders this list and
 			means nothing beyond it (spec §5.3).
 		"""
-		found = self.client.recall(query, limit=limit, where={"namespace": self.namespace})
+		# An absent metadata key reads as None (spec §5.2), so `{"namespace": None}`
+		# is a *positive* filter for "nobody namespaced this" rather than no filter
+		# at all. Sending it would hide every record another framework wrote under
+		# a namespace of its own, which is the silo this adapter exists to avoid.
+		filters = {"where": {"namespace": self.namespace}} if self.namespace else {}
+		found   = self.client.recall(query, limit=limit, **filters)
 
 		return [MemoryContent(
 			content   = record.get("content", ""),
@@ -184,7 +198,23 @@ class A2MMemory(Memory):
 
 	async def clear(self) -> None:
 		"""Forget this namespace — and only this namespace (spec §4.5).
+
+		Raises:
+			ValueError: When this memory has no namespace. There is then no
+				selector to clear by, and `{"namespace": None}` is not
+				"everything I wrote" — it is everything *nobody* namespaced,
+				which is every record every other framework put in the store.
+				spec §4.5 makes an unselected forget an error rather than an
+				emptied store, and an adapter is no place to reintroduce the
+				mistake the protocol refused.
 		"""
+		if not self.namespace:
+			raise ValueError(
+				"AutoGenA2MMemory(namespace=None) cannot clear: with nothing to scope by, the "
+				"delete would take every record in the store that carries no namespace, "
+				"including other frameworks'. Give this memory a namespace to clear it."
+			)
+
 		self.client.forget(where={"namespace": self.namespace})
 
 
@@ -194,10 +224,10 @@ class A2MMemory(Memory):
 		self.client.close()
 
 
-class A2MChatCompletionContext(ChatCompletionContext):
+class AutoGenA2MChatCompletionContext(ChatCompletionContext):
 	"""AutoGen's model context — the transcript itself — kept in A2M.
 
-	`A2MMemory` above is what an agent *recalls*; this is what it *replays*. The
+	`AutoGenA2MMemory` above is what an agent *recalls*; this is what it *replays*. The
 	distinction is the one spec §4.4 draws between `memory/recall` and
 	`memory/timeline`, and it is why this class reads with `timeline` and never
 	ranks: a conversation reordered by relevance is no longer a conversation,
@@ -224,7 +254,7 @@ class A2MChatCompletionContext(ChatCompletionContext):
 		from implementations import client as a2m_client
 
 		client  = a2m_client.connect_stdio(["python", "-m", "implementations.store_sqlite", "memory.db"])
-		context = A2MChatCompletionContext(client, session="chat-1")
+		context = AutoGenA2MChatCompletionContext(client, session="chat-1")
 	"""
 
 	def __init__(self, client, session: str, tier: str = None, initial_messages=None) -> None:

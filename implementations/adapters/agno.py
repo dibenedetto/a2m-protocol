@@ -2,7 +2,7 @@
 
 	pip install agno
 
-`A2MVectorDb` implements Agno's `VectorDb` on top of `memory/recall`, so an Agno
+`AgnoA2MVectorDb` implements Agno's `VectorDb` on top of `memory/recall`, so an Agno
 agent's knowledge base *is* the A2M store — the same one a LangChain agent is
 writing conversation into. That is the claim A2M exists to make, and this file is
 half of the evidence; [langchain.py](langchain.py) is the other half.
@@ -44,14 +44,14 @@ from   agno.vectordb.base      import VectorDb
 from   agno.vectordb.search    import SearchType
 
 
-class A2MVectorDb(VectorDb):
+class AgnoA2MVectorDb(VectorDb):
 	"""An Agno knowledge base backed by an A2M server.
 
 	Example:
 		from implementations import client as a2m_client
 
 		client    = a2m_client.connect_stdio(["python", "-m", "implementations.store_sqlite", "memory.db"])
-		knowledge = A2MVectorDb(client, namespace="handbook")
+		knowledge = AgnoA2MVectorDb(client, namespace="handbook")
 
 		knowledge.insert("hash-1", [Document(content="the deploy key rotates every ninety days")])
 		knowledge.search("how often does the key change?")

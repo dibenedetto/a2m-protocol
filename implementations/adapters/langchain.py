@@ -4,8 +4,8 @@
 
 Two adapters, because LangChain splits into two what A2M keeps in one store:
 
-	A2MChatMessageHistory   BaseChatMessageHistory -> the working tier, replayed
-	A2MRetriever            BaseRetriever          -> recall, ranked
+	LangChainA2MChatMessageHistory   BaseChatMessageHistory -> the working tier, replayed
+	LangChainA2MRetriever            BaseRetriever          -> recall, ranked
 
 That split is the whole reason this file is short. LangChain's chat history is
 *replayed* in order and its retriever is *searched* by relevance, which is
@@ -13,7 +13,7 @@ exactly the distinction spec §4.4 draws between `memory/timeline` and
 `memory/recall` — so each side maps onto one method and neither has to emulate
 the other.
 
-Three things this adapter is careful about, all of them protocol rules rather
+Four things this adapter is careful about, all of them protocol rules rather
 than LangChain ones:
 
 - **Tool calls stay whole.** An `AIMessage` carrying `tool_calls` and the
@@ -26,6 +26,12 @@ than LangChain ones:
 - **Whatever the store does not recognise is preserved.** LangChain's message
   fields that A2M has no column for go into `metadata` and come back out, rather
   than being dropped on the way through.
+- **The query vector is the caller's.** Give `LangChainA2MRetriever` an embedder
+  and it ranks by meaning, in its own space, against vectors the store kept
+  verbatim (spec §3.7). That is what lets this retriever and an Agno knowledge
+  base search the same records without either one's embeddings being rewritten
+  into the other's. Given an embedder the server cannot use, it refuses at
+  construction rather than quietly ranking by text.
 """
 
 
@@ -34,7 +40,7 @@ import json
 import uuid
 
 
-from   typing import Any, Iterable, Iterator, List, Optional, Sequence, Tuple
+from   typing import Any, Iterator, List, Optional, Sequence, Tuple
 
 
 from   langchain_core.chat_history import BaseChatMessageHistory
@@ -48,7 +54,7 @@ from   pydantic                    import ConfigDict
 # LangChain's message types and A2M's advisory 'role' (spec §3.1). The mapping is
 # lossy in one direction only: several LangChain types share the 'tool' role, so
 # the original type is kept in metadata rather than inferred back.
-ROLE_OF_TYPE = {
+_ROLE_OF_TYPE = {
 	"human"  : "user",
 	"ai"     : "assistant",
 	"system" : "system",
@@ -56,7 +62,7 @@ ROLE_OF_TYPE = {
 }
 
 
-def text_of(message: BaseMessage) -> str:
+def _text_of(message: BaseMessage) -> str:
 	"""The indexable text of a message, however LangChain is carrying it.
 
 	`content` is a string on a plain message and a list of content blocks on a
@@ -85,7 +91,7 @@ def text_of(message: BaseMessage) -> str:
 	return "".join(parts)
 
 
-def to_record(message: BaseMessage, session: str = None, group: str = None) -> dict:
+def _to_record(message: BaseMessage, session: str = None, group: str = None) -> dict:
 	"""Turn a LangChain message into an A2M record.
 
 	Args:
@@ -110,8 +116,8 @@ def to_record(message: BaseMessage, session: str = None, group: str = None) -> d
 		metadata["lc_additional_kwargs"] = json.loads(json.dumps(message.additional_kwargs, default=str))
 
 	record = {
-		"content"  : text_of(message),
-		"role"     : ROLE_OF_TYPE.get(message.type, "memory"),
+		"content"  : _text_of(message),
+		"role"     : _ROLE_OF_TYPE.get(message.type, "memory"),
 		"metadata" : metadata,
 	}
 
@@ -123,7 +129,7 @@ def to_record(message: BaseMessage, session: str = None, group: str = None) -> d
 	return record
 
 
-def from_record(record: dict) -> BaseMessage:
+def _from_record(record: dict) -> BaseMessage:
 	"""Turn an A2M record back into a LangChain message.
 
 	Args:
@@ -157,14 +163,14 @@ def from_record(record: dict) -> BaseMessage:
 	return HumanMessage(content=content)
 
 
-class A2MChatMessageHistory(BaseChatMessageHistory):
+class LangChainA2MChatMessageHistory(BaseChatMessageHistory):
 	"""LangChain chat history stored in A2M's working tier.
 
 	Example:
 		from implementations import client as a2m_client
 
 		client  = a2m_client.connect_stdio(["python", "-m", "implementations.store_sqlite", "memory.db"])
-		history = A2MChatMessageHistory(client, session="chat-1")
+		history = LangChainA2MChatMessageHistory(client, session="chat-1")
 
 		history.add_user_message("where does marco live?")
 		history.messages
@@ -212,7 +218,7 @@ class A2MChatMessageHistory(BaseChatMessageHistory):
 		Returns:
 			list[BaseMessage]: Ascending by creation.
 		"""
-		return [from_record(record) for record in self._records()]
+		return [_from_record(record) for record in self._records()]
 
 
 	def add_messages(self, messages: Sequence[BaseMessage]) -> None:
@@ -240,7 +246,7 @@ class A2MChatMessageHistory(BaseChatMessageHistory):
 				group   = None
 				pending = None
 
-			record = to_record(message, session=self.session, group=group)
+			record = _to_record(message, session=self.session, group=group)
 
 			if self.tier is not None:
 				record["tier"] = self.tier
@@ -276,12 +282,16 @@ class A2MChatMessageHistory(BaseChatMessageHistory):
 			self.client.forget(ids=ids)
 
 
-class A2MRetriever(BaseRetriever):
+class LangChainA2MRetriever(BaseRetriever):
 	"""LangChain retrieval backed by memory/recall.
 
 	Example:
-		retriever = A2MRetriever(client=client, limit=5)
+		retriever = LangChainA2MRetriever(client=client, limit=5)
 		retriever.invoke("how often does the deploy key rotate?")
+
+		# ranked by vector, in the caller's own space
+		retriever = LangChainA2MRetriever(client=client, embedder=OpenAIEmbeddings())
+		retriever.invoke("where does traffic go when a datacentre dies?")
 	"""
 
 	# BaseRetriever is a pydantic model, so these are fields rather than plain
@@ -289,10 +299,71 @@ class A2MRetriever(BaseRetriever):
 	# to allow.
 	model_config = ConfigDict(arbitrary_types_allowed=True)
 
-	client : Any  = None
-	limit  : int  = 5
-	tier   : str  = None
-	where  : dict = None
+	client   : Any  = None
+	limit    : int  = 5
+	tier     : str  = None
+	where    : dict = None
+	embedder : Any  = None
+
+
+	def model_post_init(self, _context: Any) -> None:
+		"""Refuse an embedder the server cannot use.
+
+		Sending a query vector to a server that never declared `embeddings` would
+		be quietly ignored, and the retriever would rank by text while its caller
+		believed it was ranking by meaning. Failing at construction is the same
+		choice `LangChainA2MStore` makes about `keys`, and the same one the protocol makes
+		about an unavailable prompt method (spec §4.16): refuse rather than
+		silently substitute.
+
+		Args:
+			_context: Pydantic's construction context. Unused.
+
+		Raises:
+			ValueError: If an embedder was given but the server does not declare
+				`embeddings`.
+		"""
+		if self.embedder is not None and self.client is not None and not self.client.supports("embeddings"):
+			raise ValueError(
+				"LangChainA2MRetriever was given an embedder, but this server does not declare "
+				"'embeddings': the query vector would be ignored and results ranked by "
+				"text instead. Drop the embedder, or point at a server that takes one"
+			)
+
+
+	def _embed(self, query: str) -> Optional[List[float]]:
+		"""This retriever's own vector for a query.
+
+		spec §3.7: the vector is the caller's, it travels with the query, and the
+		server never makes one of its own to compare against it. That is what lets
+		this retriever and the Agno knowledge base next door search the same store
+		without either one's records being rewritten into the other's space.
+
+		Three shapes are accepted, because the thing a chain already has lying
+		around is rarely the same thing that filled the store:
+
+			LangChain Embeddings   .embed_query(text)
+			Agno Embedder          .get_embedding(text)
+			anything callable      f(text)
+
+		All three take **one** string and return **one** vector. A batched
+		embedder -- `f(texts) -> vectors`, which is what A2M's own scorer seam
+		takes -- is one lambda away: `lambda text: embed([text])[0]`.
+
+		Args:
+			query (str): What the chain is trying to find.
+
+		Returns:
+			list[float] | None: The vector, or None when there is no embedder.
+		"""
+		if self.embedder is None:
+			return None
+
+		embed = getattr(self.embedder, "embed_query", None) \
+		     or getattr(self.embedder, "get_embedding", None) \
+		     or self.embedder
+
+		return list(embed(query))
 
 
 	def _get_relevant_documents(self, query: str, **kwargs) -> List[Document]:
@@ -314,6 +385,14 @@ class A2MRetriever(BaseRetriever):
 		if self.where:
 			filters["where"] = self.where
 
+		# The text goes too, always. A server ranking by hybrid uses both, and one
+		# ranking only by vector ignores the query string at no cost -- whereas
+		# sending the vector alone would throw away the lexical half on every
+		# server that has one.
+		vector = self._embed(query)
+		if vector is not None:
+			filters["embedding"] = vector
+
 		records = self.client.recall(query, limit=self.limit, **filters)
 
 		return [
@@ -325,7 +404,7 @@ class A2MRetriever(BaseRetriever):
 		]
 
 
-class A2MStore(BaseStore[str, bytes]):
+class LangChainA2MStore(BaseStore[str, bytes]):
 	"""LangChain's key-value store, addressed by A2M keys.
 
 	`BaseStore` is the interface behind `CacheBackedEmbeddings`, document
@@ -368,7 +447,7 @@ class A2MStore(BaseStore[str, bytes]):
 		"""
 		if not client.supports("keys"):
 			raise ValueError(
-				"A2MStore needs the 'keys' capability: it is a key-value store, and "
+				"LangChainA2MStore needs the 'keys' capability: it is a key-value store, and "
 				"without addressable records mset would append rather than replace"
 			)
 

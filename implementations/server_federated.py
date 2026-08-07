@@ -40,9 +40,7 @@ losing a memory is not.
 """
 
 
-import json
 import pathlib
-import subprocess
 import sys
 import time
 

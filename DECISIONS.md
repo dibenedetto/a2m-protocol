@@ -555,7 +555,7 @@ occupied key replaces, so a corrected document does not sit beside the stale one
 
 **What the adapters caught.** Two things, both real:
 
-- **A namespace scopes reads as well as writes.** `A2MVectorDb` originally
+- **A namespace scopes reads as well as writes.** `AgnoA2MVectorDb` originally
   filtered every search by its own namespace, so an Agno knowledge base could
   only ever find documents Agno had written. That is a private store with extra
   steps — the exact failure A2M exists to remove, reintroduced one layer up.

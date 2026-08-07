@@ -40,6 +40,7 @@ implementations/adapters/agno.py       Agno VectorDb (knowledge). Optional dep.
 implementations/adapters/agno_db.py    Agno BaseDb (user memories). Optional dep.
 implementations/adapters/crewai.py     CrewAI StorageBackend. Optional dep, needs Python <= 3.13.
 implementations/adapters/autogen.py    AutoGen Memory + ChatCompletionContext. Optional dep.
+implementations/adapters/openai_agents.py  OpenAI Agents SDK Session. Imports nothing: it is a Protocol.
 
 tools/conformance.py       conformance suite. Speaks only the protocol.
 tools/test_a2m.py          implementation tests
@@ -48,14 +49,15 @@ tools/bench_embeddings.py  which embedding model, measured
 tools/check_stdlib_only.py walks every import; CI fails on a stray dependency
 tools/check_claims.py      every MUST in the spec names what would catch it lying
 tools/claims.json          the register it checks against
-tools/test_interop.py      N×N: every adapter writes, every adapter reads
+tools/test_interop.py      N×N: every adapter writes, every adapter reads. 58/58 with all six
 tools/check_n8n.py         replays the n8n workflow's bodies at a live server
 
 www/render.py              renders spec + DECISIONS to www/public/. Stdlib only.
 www/index.html             the landing page, hand-written
 .github/workflows/ci.yml   every conformance target, on every push
 
-examples/cross_framework.py  both frameworks, one store, 6/6
+examples/cross_framework.py  both frameworks, one store, at the storage interfaces, 11/11
+examples/agent_interop.py    three agent frameworks, one memory, at the model call, 15/15
 examples/embedders.py        the scorer seam and the embed seam, offline, 11/11
 examples/rag_ingest.py       corpus ingestion: group, keys, external, multimedia, 21/21
 examples/procedural.py       skills in, promotion in, nothing spilled in, 14/14
@@ -66,6 +68,15 @@ examples/n8n_workflow.json   n8n over stock HTTP nodes, importable
 `implementations/adapters/` is the only place a third-party import is allowed,
 and its `__init__.py` imports none of them — a checkout without langchain-core
 or agno must still run every test, every conformance target and both demos.
+
+Adapter classes are named `<Framework>A2M<WhatItImplements>` —
+`AgnoA2MVectorDb`, `LangChainA2MRetriever`, `OpenAIAgentsA2MSession`. The
+framework leads because the second half is not distinctive: five of them
+implement something called a store, a memory or a session, and a bare
+`A2MMemory` reads like this repository's own class rather than AutoGen's.
+Everything below the class is `_private`: two adapters both want to call
+something `text_of` and mean different types by it, and `store_sqlite.py`
+already owns a `to_record` that means a third thing.
 
 Anything importing `a2m` runs as a module from the repository root
 (`python -m implementations.store_sqlite`). `server_minimal.py`, `client.py` and
@@ -108,7 +119,9 @@ python implementations/client.py --stdio python implementations/server_minimal.p
 Over stdio the full-capability targets include push delivery end to end. Over
 HTTP the suite instead checks that push is honestly refused, plus the binding
 checks stdio cannot reach — Origin, version header, 405, well-known — for
-**130/130** there too. Start a server with `--http` first, then
+**129/129** there. The missing one is not a gap: HTTP drops the six push-delivery
+checks and adds five (four binding, plus subscribe answering `-32003`), so
+130 − 6 + 5 = 129. Start a server with `--http` first, then
 `python -m tools.conformance --http http://127.0.0.1:8778/`.
 
 **A change is not done until all eight conformance targets still pass.** They
@@ -146,6 +159,16 @@ Docstring examples are executed by doctest. If you write one, it must be true.
   keeps proving useful is displaced by sheer volume of newer material.
 - **`owner` is not a security boundary.** It is data partitioning. Over a network
   the scope must come from the authenticated transport, never from the client.
+- **An adapter's namespace scopes writes and deletes, never reads.** DECISION
+  023: a store you can only read your own writes from is a private store with
+  extra steps. This has now bitten four adapters — Agno, CrewAI, `AgnoA2MDb` and
+  `AutoGenA2MMemory` — so assume the next one has it too until the interop suite says
+  otherwise. The trap underneath is protocol-level: an absent metadata key reads
+  as `None` in a `where` filter (spec §5.2), so `{"namespace": None}` is a
+  *positive* filter for "nobody namespaced this", not the absence of a filter.
+  It silently hides every record another framework wrote under a namespace, and
+  as a `forget` selector it deletes every record that has none. Build the filter
+  conditionally; never pass a key whose value might be `None`.
 - **`score` is ranking only.** Never comparable across servers or calls. Do not
   compare, threshold or average scores from different sources.
 - **Undeclared capability → `-32003`, never `-32601`.** A client cannot tell

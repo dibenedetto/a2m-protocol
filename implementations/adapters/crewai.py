@@ -2,7 +2,7 @@
 
 	pip install crewai
 
-`A2MStorageBackend` implements CrewAI's `StorageBackend` protocol, so a crew's
+`CrewAIA2MStorageBackend` implements CrewAI's `StorageBackend` protocol, so a crew's
 unified memory lives in an A2M store — the same one a LangChain agent replays,
 an Agno knowledge base searches and an AutoGen agent recalls from. Wire it in
 wherever CrewAI accepts a storage backend.
@@ -47,7 +47,7 @@ from   typing   import Any
 from   crewai.memory.types import MemoryRecord, ScopeInfo
 
 
-class A2MStorageBackend:
+class CrewAIA2MStorageBackend:
 	"""CrewAI unified-memory storage on an A2M server.
 
 	Satisfies `crewai.memory.storage.backend.StorageBackend`, which is a
@@ -57,7 +57,7 @@ class A2MStorageBackend:
 		from implementations import client as a2m_client
 
 		client  = a2m_client.connect_stdio(["python", "-m", "implementations.store_sqlite", "memory.db"])
-		backend = A2MStorageBackend(client, namespace="crew-1")
+		backend = CrewAIA2MStorageBackend(client, namespace="crew-1")
 
 		backend.save([MemoryRecord(content="the deploy key rotates every ninety days",
 		                           scope="/ops", categories=["infra"])])

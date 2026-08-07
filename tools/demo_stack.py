@@ -34,7 +34,7 @@ import sys
 from   typing      import Any
 
 
-from   a2m         import MemoryClient, connect_stdio
+from   a2m         import MemoryClient
 from   a2m.jsonrpc import Client, LocalTransport
 from   a2m.memory  import MemoryTier
 

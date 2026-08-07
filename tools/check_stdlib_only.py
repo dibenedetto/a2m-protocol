@@ -51,10 +51,20 @@ ALLOWED = {
 	"implementations/store_postgres.py"     : {"psycopg"},
 	# The example whose entire point is that two frameworks meet on one store.
 	"examples/cross_framework.py"           : {"agno", "langchain_core"},
+	# The same claim one level up, at the model call rather than the store, which
+	# needs each framework's *agent* rather than its storage interface -- so it
+	# reaches past the core package the adapter imports and into agentchat, ext
+	# and the SDK's own response types. Nothing imports it and it is not on the
+	# default test path: it runs in the interop job beside cross_framework.py.
+	"examples/agent_interop.py"             : {"agents", "agno", "autogen_agentchat",
+	                                           "autogen_ext", "openai"},
 	# The interop matrix, which must import every framework to prove they share
 	# a store. Nothing imports it, and it is not on the default test path -- it
-	# has a CI job of its own, on the one Python version all four support.
-	"tools/test_interop.py"                 : {"agno", "crewai", "autogen_core", "langchain_core"},
+	# has a CI job of its own, on the one Python version all of them support.
+	# `agents` is here for a reason the others are not: the OpenAI adapter imports
+	# nothing, so the suite imports the SDK itself to keep the skip honest.
+	"tools/test_interop.py"                 : {"agents", "agno", "crewai",
+	                                           "autogen_core", "langchain_core"},
 }
 
 # Optional dependencies the reference implementation may import *lazily*, inside
