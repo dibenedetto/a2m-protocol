@@ -37,7 +37,7 @@ import sqlite3
 import sys
 
 
-from   typing                import Any, Callable
+from   typing                import Callable
 
 
 from   a2m                   import A2M_VERSION, MemoryServer, serve_a2m_http, serve_a2m_stdio

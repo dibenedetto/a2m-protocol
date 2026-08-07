@@ -120,6 +120,12 @@ jobs:
   # The HTTP binding reaches checks stdio cannot: Origin, the version header,
   # 405 on GET, the well-known profile -- and that push is honestly refused on a
   # transport that cannot carry a notification back.
+  #
+  # 129 rather than stdio's 130, and the arithmetic is the invariant: HTTP drops
+  # the six push-delivery checks, because a binding that cannot carry a
+  # notification back must not advertise push, and adds five -- four binding
+  # checks plus the one that subscribing there is -32003. 130 - 6 + 5 = 129. If
+  # this number moves, one of those two halves moved with it.
   http:
     name: conformance over http
     runs-on: ubuntu-latest
@@ -138,7 +144,7 @@ jobs:
             sleep 1
           done
           python -m tools.conformance --http http://127.0.0.1:8778/ | tee report.txt
-          grep -q "130/130 checks passed" report.txt || { echo "::error::expected 130 checks over http"; exit 1; }
+          grep -q "129/129 checks passed" report.txt || { echo "::error::expected 129 checks over http"; exit 1; }
 
   # Both PostgreSQL targets. They exist to catch tier logic that leaked into a
   # storage engine: store.py holds the tier model and contains no SQL, and the
@@ -214,7 +220,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install every framework A2M claims to join
-        run: pip install langchain-core agno crewai autogen-core
+        run: pip install langchain-core agno crewai autogen-core autogen-agentchat autogen-ext openai-agents
 
       - name: Every adapter writes, every adapter reads
         run: |
@@ -224,6 +230,12 @@ jobs:
 
       - name: Two frameworks over one store, end to end
         run: python -m examples.cross_framework
+
+      # One level up from the line above: not "the record crossed" but "the
+      # record reached the other framework's model call", which is the only
+      # difference an agent can actually act on.
+      - name: Three agent frameworks over one store, end to end
+        run: python -m examples.agent_interop
 
       - name: The n8n workflow's requests are valid A2M
         run: |

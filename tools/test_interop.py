@@ -20,7 +20,7 @@ Adapters whose framework is not installed are **skipped by name** rather than
 silently passing, because a matrix that shrinks quietly is worse than one that
 fails: it reports success for coverage it no longer has.
 
-	pip install langchain-core agno crewai autogen-core
+	pip install langchain-core agno crewai autogen-core openai-agents
 
 CrewAI cannot run on Python 3.14 (its chromadb dependency uses pydantic v1), so
 the full matrix needs 3.12 or 3.13. Every other adapter runs anywhere. The suite
@@ -31,7 +31,6 @@ different results and only one of them is the claim.
 
 import pathlib
 import sys
-import tempfile
 
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
@@ -113,10 +112,10 @@ def adapter_langchain(memory: MemoryClient, tier: str):
 	Returns:
 		tuple: (write, read) callables.
 	"""
-	from implementations.adapters.langchain import A2MRetriever
+	from implementations.adapters.langchain import LangChainA2MRetriever
 
 	# BaseRetriever is a pydantic model, so the client is a named field.
-	retriever = A2MRetriever(client=memory, tier=tier, limit=10)
+	retriever = LangChainA2MRetriever(client=memory, tier=tier, limit=10)
 
 	def write(text: str) -> None:
 		memory.remember(text, tier=tier, metadata={"via": "langchain"})
@@ -139,12 +138,12 @@ def adapter_agno(memory: MemoryClient, tier: str):
 		tuple: (write, read) callables.
 	"""
 	from agno.knowledge.document                import Document
-	from implementations.adapters.agno          import A2MVectorDb
+	from implementations.adapters.agno          import AgnoA2MVectorDb
 
 	# namespace=None is "write mine, search everything", which is the setting
 	# that makes a shared store shared rather than a private one with extra
 	# steps (DECISION 023).
-	knowledge = A2MVectorDb(memory, namespace=None, tier=tier)
+	knowledge = AgnoA2MVectorDb(memory, namespace=None, tier=tier)
 
 	def write(text: str) -> None:
 		knowledge.insert("interop", [Document(content=text)])
@@ -172,9 +171,9 @@ def adapter_agno_db(memory: MemoryClient, tier: str):
 		tuple: (write, read) callables.
 	"""
 	from agno.db.schemas                     import UserMemory
-	from implementations.adapters.agno_db    import A2MDb
+	from implementations.adapters.agno_db    import AgnoA2MDb
 
-	database = A2MDb(memory, namespace="interop/memories", tier=tier)
+	database = AgnoA2MDb(memory, namespace="interop/memories", tier=tier)
 	counter  = {"n": 0}
 
 	def write(text: str) -> None:
@@ -210,9 +209,9 @@ def adapter_crewai(memory: MemoryClient, tier: str):
 		tuple: (write, read) callables.
 	"""
 	from crewai.memory.types                     import MemoryRecord
-	from implementations.adapters.crewai         import A2MStorageBackend
+	from implementations.adapters.crewai         import CrewAIA2MStorageBackend
 
-	backend = A2MStorageBackend(memory, namespace="interop", tier=tier)
+	backend = CrewAIA2MStorageBackend(memory, namespace="interop", tier=tier)
 	vector  = [1.0, 0.0, 0.0, 0.0]
 
 	def write(text: str) -> None:
@@ -244,9 +243,9 @@ def adapter_autogen(memory: MemoryClient, tier: str):
 	import asyncio
 
 	from autogen_core.memory                     import MemoryContent, MemoryMimeType
-	from implementations.adapters.autogen        import A2MMemory
+	from implementations.adapters.autogen        import AutoGenA2MMemory
 
-	remembered = A2MMemory(memory, namespace=None, tier=tier, limit=10)
+	remembered = AutoGenA2MMemory(memory, namespace=None, tier=tier, limit=10)
 
 	def write(text: str) -> None:
 		asyncio.run(remembered.add(MemoryContent(content=text, mime_type=MemoryMimeType.TEXT)))
@@ -331,11 +330,11 @@ def test_non_searching(memory: MemoryClient, tier: str) -> None:
 	print("\n  sharing without searching")
 
 	try:
-		from implementations.adapters.langchain import A2MStore
+		from implementations.adapters.langchain import LangChainA2MStore
 	except Exception as exc:
 		print(f"      skip: langchain store ({type(exc).__name__})")
 	else:
-		store = A2MStore(memory, namespace="interop/store", tier=tier)
+		store = LangChainA2MStore(memory, namespace="interop/store", tier=tier)
 		store.mset([("handbook", b"the interop store holds the escalation policy")])
 
 		check("a key-value store round-trips", store.mget(["handbook"])[0] ==
@@ -351,15 +350,79 @@ def test_non_searching(memory: MemoryClient, tier: str) -> None:
 		store.mdelete(["handbook"])
 
 	try:
+		from implementations.adapters.langchain import LangChainA2MRetriever
+	except Exception as exc:
+		print(f"      skip: langchain retriever ({type(exc).__name__})")
+	else:
+		# A retriever given a query embedder against a server that never declared
+		# `embeddings` would have its vector ignored and rank by text instead --
+		# the caller believing it searched by meaning while it searched by words.
+		# The adapter refuses at construction rather than silently substituting,
+		# which is the same choice the protocol makes about an unavailable prompt
+		# method (spec §4.16).
+		lexical = MemoryClient(Client(LocalTransport(
+			MemoryServer(MemoryStack(), capabilities=["core", "tiers"]).dispatcher)))
+
+		try:
+			LangChainA2MRetriever(client=lexical, embedder=lambda text: [1.0])
+			refused = False
+		except ValueError:
+			refused = True
+
+		check("a retriever refuses an embedder the server cannot use", refused)
+		check("and accepts one where the server declares embeddings",
+		      LangChainA2MRetriever(client=memory, embedder=lambda text: [1.0]) is not None)
+
+	try:
+		import asyncio
+
+		# The adapter imports nothing -- the SDK's Session is a structural
+		# Protocol -- so without this import the row would pass on a machine that
+		# has no SDK at all, which is the silent shrinking this suite refuses.
+		import agents
+
+		from implementations.adapters.openai_agents import OpenAIAgentsA2MSession
+	except Exception as exc:
+		print(f"      skip: openai-agents session ({type(exc).__name__})")
+	else:
+		check("the sdk recognises an a2m store as a session",
+		      isinstance(OpenAIAgentsA2MSession(memory, "interop-probe"), agents.memory.Session))
+
+		session = OpenAIAgentsA2MSession(memory, "interop-run")
+
+		async def exercise_session():
+			await session.add_items([
+				{"role": "user", "content": "who signs off a release?"},
+				{"id": "msg_1", "type": "message", "status": "completed", "role": "assistant",
+				 "content": [{"type": "output_text", "text": "the release owner does", "annotations": []}]},
+			])
+			return await session.get_items()
+
+		items = asyncio.run(exercise_session())
+		check("a session replays in order",
+		      [item.get("role") for item in items] == ["user", "assistant"], items)
+
+		# The SDK hands these dicts straight back to the model, so a rebuild that
+		# is merely close is a provider error waiting to happen.
+		check("and its items come back verbatim",
+		      items[1].get("status") == "completed"
+		      and items[1]["content"][0]["text"] == "the release owner does", items[1])
+
+		turns = memory.timeline(where={"session": "interop-run"})
+		check("the sdk's transcript is in the shared store", len(turns) == 2, turns)
+
+		asyncio.run(session.clear_session())
+
+	try:
 		import asyncio
 
 		from autogen_core.models             import AssistantMessage, UserMessage
-		from implementations.adapters.autogen import A2MChatCompletionContext
+		from implementations.adapters.autogen import AutoGenA2MChatCompletionContext
 	except Exception as exc:
 		print(f"      skip: autogen model context ({type(exc).__name__})")
 		return
 
-	context = A2MChatCompletionContext(memory, session="interop-chat")
+	context = AutoGenA2MChatCompletionContext(memory, session="interop-chat")
 
 	async def exercise():
 		await context.add_message(UserMessage(content="who owns the scheduler?", source="user"))

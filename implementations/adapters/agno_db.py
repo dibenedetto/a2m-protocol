@@ -9,7 +9,7 @@ evaluation runs, traces and metrics. An agent whose knowledge is shared but
 whose *memories* are in a private SQLite file is not really sharing its memory,
 which is the claim this repository makes on its first line.
 
-`A2MDb` closes that half for the part of `BaseDb` that is genuinely memory:
+`AgnoA2MDb` closes that half for the part of `BaseDb` that is genuinely memory:
 
 	user memories   -> A2M records, addressed by key, in a searchable tier
 	everything else -> inherited from Agno's own InMemoryDb
@@ -48,7 +48,7 @@ from   agno.db.in_memory import InMemoryDb
 from   agno.db.schemas   import UserMemory
 
 
-class A2MDb(InMemoryDb):
+class AgnoA2MDb(InMemoryDb):
 	"""Agno's database interface, with user memories kept in an A2M store.
 
 	Example:
@@ -56,7 +56,7 @@ class A2MDb(InMemoryDb):
 		from agno.agent import Agent
 
 		client = a2m_client.connect_stdio(["python", "-m", "implementations.store_sqlite", "memory.db"])
-		agent  = Agent(db=A2MDb(client), enable_user_memories=True)
+		agent  = Agent(db=AgnoA2MDb(client), enable_user_memories=True)
 	"""
 
 	def __init__(self, client, namespace: str = "agno/memories", tier: str = None) -> None:
@@ -80,7 +80,7 @@ class A2MDb(InMemoryDb):
 
 		if not client.supports("keys"):
 			raise ValueError(
-				"A2MDb needs the 'keys' capability: a user memory is addressed by its "
+				"AgnoA2MDb needs the 'keys' capability: a user memory is addressed by its "
 				"memory_id, and without keys an upsert would append a second copy"
 			)
 
