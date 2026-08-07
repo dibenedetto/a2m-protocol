@@ -219,8 +219,15 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Through the declared extras, never by naming packages here. Unpinned,
+      # pip resolves `autogen-core autogen-agentchat autogen-ext` to 0.0.2,
+      # 0.2.40 and 0.0.1 -- placeholder packages that satisfy the names with no
+      # constraints and ship no `autogen_core` module at all. The job then went
+      # green on five adapters and reported the sixth as merely absent. The
+      # floors in pyproject.toml already excluded that; this line was the only
+      # place they were not applied.
       - name: Install every framework A2M claims to join
-        run: pip install langchain-core agno crewai autogen-core autogen-agentchat autogen-ext openai-agents
+        run: pip install -e ".[langchain,agno,crewai,autogen,agents]"
 
       - name: Every adapter writes, every adapter reads
         run: |
